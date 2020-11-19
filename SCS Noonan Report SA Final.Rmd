@@ -1,0 +1,2810 @@
+---
+title: |
+  | SCS Noonan Scholars Program: 
+  | Analysis of the 2012-2020 Cohorts
+author: "R. Jordan Crouser, PhD"
+date: "8/7/2019"
+output:
+  bookdown::pdf_document2:
+    toc: true
+    toc_depth: 2
+    keep_tex: true
+    fig_caption: yes
+    number_sections: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE, 
+                      warning = FALSE)
+
+library(tidyverse)
+library(reshape2)
+library(readxl)
+library(scales)
+library(pander)
+library(magrittr)
+library(ggpubr)
+library(bookdown)
+library("RColorBrewer")
+
+panderOptions('table.split.table', 'Inf')
+panderOptions('table.split.cells', 80)
+panderOptions('keep.line.breaks', TRUE)
+panderOptions('missing', '--')
+panderOptions('keep.trailing.zeros', TRUE)
+```
+
+\newpage
+# Introduction
+SCS Noonan Scholars is a 501(c)(3) organization dedicated to helping high-achieving low-income underrepresented students get into and graduate from top colleges equipped to achieve their full career potential. This program was originally established in 2001 by philanthropists James and Patricia London under the name South Central Scholars, and began as a scholarship program serving a few high-achieving low-income students in the Los Angeles area. The program quickly grew in scope to include academic intervention, academic and social-emotional support, and career guidance and networking. In 2012, SCS conducted a pilot summer program ("Summer Academy") to ensure that all participating Scholars enter college with the prerequisite writing, math, and science skills needed to persist in their chosen majors. In 2014, this program was replicated in Boston, Massachusetts under the name Noonan Scholars and in 2017, the Los Angeles and Boston programs unified under the name SCS Noonan Scholars.
+
+
+This report details the results of an independent analysis commissioned by SCS Noonan Scholars during July-August 2019. The purpose of this analysis is threefold:
+
+#. To evaluate the impact of the SCS Noonan Scholars Program since 2012.
+#. To quantify the effects of attending Summer Academy on Scholars' academic performance.
+#. To document additional observations and recommendations for future development.
+
+The analysis was conducted by Dr. R. Jordan Crouser. Dr. Crouser earned his doctorate in Computer Science from Tufts University in 2013, and has held academic and research positions in both Statistical & Data Science and Computer Science. He served as an instructor at Summer Academy during 2018 and 2019.
+
+# About the Data
+
+Two datasets were furnished by SCS Noonan Scholars for the purposes of this analysis. 
+
+
+## Scholar Metadata (\texttt{Scholar Metadata.csv})
+```{r ingest-data}
+# Import historic SAT percentile data from College Board (99+ encoded as 100)
+SAT_percentile_historic <- read_csv("College Board Historic SAT Percentiles.csv", 
+                                    col_types = cols(.default = "n")) %>%
+  gather(key = "Year", value = "SAT Percentile", -`SAT Composite Score`) %>%
+  mutate(Cohort = as.numeric(Year)+1) %>%
+  select(-Year)
+
+# Import Scholar Metadata, join with SAT Percentile
+scholar_metadata = read_csv("Scholar Metadata.csv") %>%
+  
+  # Calculate some new fields
+  mutate(`Family Income per Capita` = `Family Income`/`Family Size`,
+         `# Years to Graduate` = ifelse(`Scholar Status` == "Scholar Alumni", `# Years of College`, NA),
+
+         `STEM Persistence` = ifelse(`Current Major STEM?` == 0 & `Intended Major STEM?` == 1,
+                                               "Dropped STEM", 
+                                               ifelse(`Current Major STEM?` == 1 & `Intended Major STEM?` == 0, 
+                                                      "Added STEM", 
+                                                      ifelse(`Current Major STEM?` == 1 & `Intended Major STEM?` == 1, 
+                                                             "Persisted in STEM", 
+                                                             ifelse(`Current Major STEM?` == 0 & `Intended Major STEM?` == 0, 
+                                                                    "Persisted in non-STEM", 
+                                                                    "UNKNOWN")
+                                                             )
+                                                      )
+                                               )
+         ) %>%
+  
+  # Recode some columns
+  mutate(`Class Rank` = as.numeric(`Class Rank`),
+         `First Generation College Student` = as.numeric(`First Generation College Student`),
+         `STEM Persistence` = factor(`STEM Persistence`, 
+                                               levels = c("Persisted in non-STEM", 
+                                                          "Dropped STEM", 
+                                                          "Added STEM", 
+                                                          "Persisted in STEM")),
+         Gender = as.factor(Gender),
+         `College Degree Earned Type` = as.factor(`College Degree Earned Type`),
+         `Estimated Student Loans at Graduation` = factor(`Estimated Student Loans at Graduation`,
+                                                          levels = c("No Student Loans",
+                                                                     "Less than 5,000",
+                                                                     "5,000-9,999",
+                                                                     "10,000-19,999",
+                                                                     "20,000-29,999",
+                                                                     "More than 30,000")),
+         `Scholar Status` = as.factor(`Scholar Status`),
+         `Scholar Secondary Status` = as.factor(`Scholar Secondary Status`),
+         `6 Months Post College: Employment Status` = as.factor(`6 Months Post College: Employment Status`),
+         `6 Months Post College: Graduate School` = as.factor(`6 Months Post College: Graduate School`)) %>%
+  
+    mutate(IvyPlus = ifelse(`Scholar College` %in% c("Brown University", "Columbia University",
+                                                   "Cornell University", "Dartmouth College", 
+                                                   "Harvard University", "University of Pennsylvania", 
+                                                   "Princeton University", "Yale University",
+                                                   "Stanford", "Massachusetts Institute of Technology",
+                                                   "University of Chicago", "Duke University" ), 1, 0)) %>%
+  
+    filter(Cohort >= 2012,
+         !`Scholar Secondary Status` %in% c("Did Not Renew", "Break/Suspension")) %>%
+  
+    filter(`Scholar Status` == "Scholar Alumni" | (`Last Renewal Date` %in% c("2019 Spring", "2019 Fall", NA) &
+                                                   `Scholar Status` == "Current Scholar")) %>%
+  
+  left_join(SAT_percentile_historic, by = c("SAT Total" = "SAT Composite Score", "Cohort" = "Cohort")) %>%
+  mutate(`SAT Group` = cut(`SAT Percentile`, 
+                              breaks= c(-Inf, 49, 79, Inf),
+                              labels = c("<50th", 
+                                         "50th-80th", 
+                                         ">80th")),
+         `College Forbes Ranking 2018` = as.numeric(`College Forbes Ranking 2018`))
+
+#scholar_metadata %>% group_by(`Scholar Status`) %>% summarise(n=n())
+#scholar_metadata %>% filter(!`Last Renewal Date` %in% c("2018 Fall", "2019 Spring", "2019 Fall") & `Scholar Status` == "Current Scholar") %>% summarise(n = n())
+```
+
+```{r eval = F}
+
+in_set = scholar_metadata %>% select(`Scholar ID`)
+full_set = read_csv("Scholar Metadata.csv")  %>% select(`Scholar ID`)
+
+removed = setdiff(full_set, in_set)
+
+full_set = read_csv("Scholar Metadata.csv")
+
+removed %>%
+  left_join(full_set, by = c("Scholar ID" = "Scholar ID")) %>%
+  select(`Scholar ID`, `Scholar Status`, `Scholar Secondary Status`, `Last Renewal Date`)
+```
+
+
+The first dataset contains a variety of demographic and summary academic performance measurements on 1029 individual participating Scholars from 2012 to 2020. From this collection, 66 were removed from the analysis due to missing or incomplete data, resulting in a final dataset reflecting 608 current Scholars and 355 program alumni. To preserve Scholars' privacy, names and contact information have been omitted from this analysis. Throughout the remainder of this document, the term \textbf{cohort} (labeled with a year, e.g. "the 2019 cohort") will be used to refer to the group of Scholars who graduated high school in that year. For detailed information regarding the other measures in this dataset, see Appendix I.
+
+### General Characteristics at a Glance
+- An average of 107 Scholars were accepted into each of the 2012-2020 cohorts.
+
+```{r cohortSize, eval = FALSE}
+scholar_metadata %>%
+  group_by(Cohort) %>%
+  summarise(n = n())
+```
+
+- Out of the 963 Scholars in the dataset:
+
+    - 945 (98.1%) come from families whose income is at or below 400% of the Federal Poverty Level.
+```{r fpl, eval = FALSE}
+scholar_metadata %>%
+  mutate(under400 = `Federal Poverty Level Percentage` <= 400) %>%
+  group_by(under400) %>%
+  summarise(n = n()) %>%
+  spread(key = under400, value = n) %>%
+  rename(`<=400% FPL` = `TRUE`, `>=400% FPL` = `FALSE`) %>%
+  mutate(perc = `<=400% FPL` / (`<=400% FPL` + `>=400% FPL`))
+```
+
+    - 757 (79.0%) are first-generation college students.
+```{r 1stgen, eval = FALSE}
+scholar_metadata %>%
+  group_by(`First Generation College Student`) %>%
+  summarise(n = n()) %>%
+  spread(key = `First Generation College Student`, value = n) %>%
+  mutate(`1stgen Ratio` = `1` / `0`,
+         perc = `1` / (`1` + `0`)) %>%
+  pander()
+```
+
+    - 582 (60.5%) are female, yielding a sex ratio of 1.532.
+```{r genderRatio, eval = FALSE}
+scholar_metadata %>%
+  group_by(Gender) %>%
+  summarise(n = n()) %>%
+  spread(key = Gender, value = n) %>%
+  mutate(`Gender Ratio` = Female / Male,
+         perc = Female / (Female + Male)) %>%
+  pander()
+```
+
+    - 510 (53.0%) identify as Hispanic or Latinx.
+    - 303 (31.5%) identify as Black or African-American.
+    - 157 (16.3%) identify as Asian.
+    - 151 (15.7%) identify as multiracial.
+    
+```{r race, eval = FALSE}
+scholar_metadata %>%
+  group_by(`Asian`) %>%
+  summarise(n = n()) %>%
+  spread(key = `Asian`, value = n) %>%
+  mutate(perc = `1` / (`1` + `0`)) %>%
+  pander()
+```
+
+### High School GPA
+The SCS Noonan Scholars program is becoming increasingly competitive. Data regarding High School GPA at time of admission was tracked beginning in 2016:
+
+- In 2016, the average High School GPA was **3.71**.
+- This average has **increased every year since that time**. 
+- The average High School GPA for the most recent 2020 cohort is **3.93**.
+
+Table \ref{table:HS-gpa} illustrates the year-by-year trend in Scholar's high school GPA upon admission. _Note: the \texttt{\% missing} column indicates how many Scholars in each cohort are missing a value for this measure in the dataset._
+
+```{r GPA-upon-admission}
+# ISSUE: This is unweighted: there are 2 Scholars with a GPA > 4.0, can we assume everyone else is on a 4.0-scale?
+GPA_at_admission_summary = scholar_metadata %>%
+  filter(Cohort >= 2016) %>%   # We didn't reliably track this until 2016,
+  group_by(Cohort) %>%
+  summarise(`Average HS Unweighted GPA` = round(mean(`HS Unweighted GPA`, na.rm = TRUE), 2),
+            sd = sd(`HS Unweighted GPA`, na.rm = TRUE),
+            n = n(),
+            `% missing` = percent(sum(is.na(`HS Unweighted GPA`)) / n)) %>%
+  # mutate(se = sd / sqrt(n),
+  #        lower.ci = `Average HS Unweighted GPA` - qt(1 - (0.05 / 2), n - 1) * se,
+  #        upper.ci = `Average HS Unweighted GPA` + qt(1 - (0.05 / 2), n - 1) * se,
+  #        `95% CI` = paste("[ ", signif(lower.ci, 3), ", ", signif(upper.ci, 3)," ]", sep = "")) %>%
+  select(Cohort, 
+         `Average HS Unweighted GPA`, 
+         #`95% CI`, 
+         `% missing`)
+
+GPA_at_admission_summary %>%
+  pander(caption = "\\label{table:HS-gpa}Average HS Unweighted GPA at Admission")
+```
+
+The density plot in Figure 1 highlights the changing distribution of Scholars' High School GPA upon admission each year beginning in 2016. The distribution is becoming increasingly right-skewed over time: the average is getting higher, and the difference between the lowest- and highest-performing students is getting smaller.
+
+```{r HS_gpa_density, fig.height = 2.5, fig.align = "left"}
+scholar_metadata %>%
+  filter(Cohort >= 2016,   # We didn't reliably track this until 2016
+         `HS Unweighted GPA` > 0) %>%        # Filter out "0" GPA (actually missing)
+  ggplot(aes(x = `HS Unweighted GPA`, fill = as.factor(Cohort))) +
+  geom_density(alpha = 0.3) + 
+  geom_vline( data = GPA_at_admission_summary, 
+              aes(xintercept = GPA_at_admission_summary$`Average HS Unweighted GPA`,
+                  color = as.factor(Cohort)), 
+              linetype = "dashed") +
+  geom_text(data = GPA_at_admission_summary, 
+            aes(x = GPA_at_admission_summary$`Average HS Unweighted GPA`,
+                y = 5.5, angle=90, vjust = -0.5,
+                color = as.factor(Cohort),
+                label = paste("mean =",GPA_at_admission_summary$`Average HS Unweighted GPA`)),
+            size = 2.5) +
+  xlab("Fig. 1 Average High School GPA upon Admission to SCS Noonan Scholars") +      # Label the x-axis
+  ylab("Density") +     # Label the y-axis`
+  scale_y_continuous(expand=c(0,0)) +
+  facet_grid(~Cohort) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.title.x = element_text(color = "grey20", size = 10, angle = 0, hjust = .5, vjust = 0, face = "plain", family="Times")) +
+  guides(fill = FALSE,
+         color = FALSE)
+```
+
+### High School SAT Scores
+The average SAT Percentile is also steadily increasing: 
+
+- For the 2012 cohort, the mean score was in the **78th percentile**.
+- For the 2019 cohort, the mean score was in the **86th percentile**.
+
+Table \ref{table:SAT-by-cohort} captures the historic trend toward higher SAT scores with each new cohort. This data was generated by cross-referencing each Scholar's reported total SAT score with the percentile ranges provided by the College Board for the year in which the examination was taken.
+
+```{r SAT_percentile}
+scholar_metadata %>%
+  filter(Cohort < 2020) %>%
+  group_by(Cohort) %>%
+  summarise(`Average SAT Percentile` = signif(mean(`SAT Percentile`, na.rm = TRUE), 3),
+            sd = sd(`SAT Percentile`, na.rm = TRUE),
+            n = n(),
+            `% missing` = percent(sum(is.na(`SAT Percentile`)) / n)) %>%
+  select(Cohort, 
+         `Average SAT Percentile`, 
+         #`95% CI`, 
+         `% missing`)%>%
+  pander(caption = "\\label{table:SAT-by-cohort}Average Composite SAT Percentile, by Cohort")
+```
+
+The boxplot in Figure 2 illustrates the spread of SAT Percentile by cohort. Note that the only statistically significant year-over-year difference was between the 2016 and 2017 cohorts.
+
+```{r SAT_boxplot, fig.height = 3, fig.width = 6.3, fig.align = "left"}
+my_comparisons <- list(c("2016", "2017"))
+
+SAT_median_scores = scholar_metadata %>%
+  group_by(Cohort) %>%
+  summarise(med = median(`SAT Percentile`, na.rm = T),
+            label = paste(med, "th", sep = "")) %>%
+  filter(Cohort < 2020)
+
+scholar_metadata %>%
+  filter(Cohort < 2020) %>%
+  ggplot(aes(y = `SAT Percentile`, x = factor(`Cohort`))) +
+  geom_jitter(pch = 21, size = .5, width = 0.1, alpha = 0.3)  +   # Add original datapoints (jittered)
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +                   # Hide outliers so they don't double-plot
+  geom_text(data = SAT_median_scores, aes(x = factor(Cohort), y = med, label = label), 
+              size = 2.5, vjust = 1.4) +
+  xlab("Fig. 2 Distribution of SAT Percentile by Cohort") +                      # Label the x-axis
+  ylab("SAT Percentile") + # Label the y-axis
+  ylim(c(0,110)) +
+  stat_compare_means(comparisons = my_comparisons, aes(label=..p.signif..)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),
+        axis.title.x = element_text(color = "grey20", size = 10, angle = 0, hjust = .5, vjust = 0, face = "plain", family="Times"))
+  
+
+```
+
+### Income Levels
+
+More than 98% of Scholars have had family incomes at or below 400% of the Federal Poverty Level during each of the previous 3 cohorts, and 6 out of the last 9 cohorts (Table \ref{table:income}).
+
+```{r FPL}
+scholar_metadata %>%
+  group_by(Cohort) %>%
+  summarise(`% of Scholars w/ Family Income < 200% FPL` = percent(sum(`Federal Poverty Level Percentage` <= 200)/n()),
+            `% of Scholars w/ Family Income < 400% FPL` = percent(sum(`Federal Poverty Level Percentage` <= 400)/n()),
+            `% missing` = percent(sum(is.na(`Federal Poverty Level Percentage`)) / n())) %>%
+  pander(split.cells = c(10, 20, 20, 20),
+         caption = "\\label{table:income}% of Scholars, by % Federal Poverty Level and Cohort" )
+```
+
+The average family income has been **below $40,000** for each cohort since 2012. 
+
+```{r average_income}
+scholar_metadata %>%
+  group_by(Cohort) %>%
+  summarise(`Average Family Income` = signif(mean(`Family Income`, na.rm = TRUE), 5),
+            sd = sd(`Family Income`, na.rm = TRUE),
+            n = n(),
+            `% missing` = percent(sum(is.na(`Family Income`)) / n)) %>%
+  # mutate(se = sd / sqrt(n),
+  #        lower.ci = `Average Family Income` - qt(1 - (0.05 / 2), n - 1) * se,
+  #        upper.ci = `Average Family Income` + qt(1 - (0.05 / 2), n - 1) * se,
+  #        `95% CI` = paste("[ ", dollar(signif(lower.ci, 5)), ", ", dollar(signif(upper.ci, 5))," ]", sep = "")) %>%
+  select(Cohort, 
+         `Average Family Income`, 
+         # `95% CI`, 
+         `% missing`)%>%
+  mutate(`Average Family Income` = dollar(`Average Family Income`)) %>%
+  pander(split.cells = c(10, 20, 20),
+         caption = "Average Family Income, by Cohort")
+```
+
+### Race and Ethnicity
+
+Across all cohorts:
+
+- **31.5%** of Scholars identify as Black or African American.
+- **53.0%** of Scholars identify as Hispanic or Latinx.
+- **81.3%** of Scholars identify as one or more of Black, African American, Hispanic or Latinx.
+- **78.6%** are first-generation college students.
+
+
+```{r blackOrLatinx}
+scholar_metadata %>%
+  group_by(Cohort) %>%
+  summarise(`% Black and/or African American` = percent(sum(`Black or African American`)/n()),
+            `% Hispanic and/or Latinx` = percent(sum(`Hispanic or Latinx`)/n()),
+            `% Black, African American, Hispanic, and/or Latinx` = percent(sum(ifelse(`Black or African American` | `Hispanic or Latinx`, 1, 0))/n()),
+            `% First Generation` = percent(sum(`First Generation College Student` == 1, na.rm = T)/n()))  %>%
+  pander(split.cells = c(10, 20, 10, 20, 20),
+         caption = "Proportion of Scholars, by Race and Cohort")
+```
+
+
+
+## Scholar Transcripts (\texttt{Scholar Transcripts.csv})
+```{r ingest-transcripts}
+scholar_transcripts <- read_csv("Scholar Transcripts.csv") %>%
+  mutate(`College Year` = factor(`College Year`, levels = c("Freshman",
+                                                            "Sophomore",
+                                                            "Junior",
+                                                            "Senior",
+                                                            "Super Senior")),
+         
+         Performance = ifelse(`Course GPA (Normalized)` >= 3.3, "B+ or above", 
+                              ifelse(`Course GPA (Normalized)` >= 3.0, "B or above", "Below B")))
+
+# transcript_but_no_metadata = scholar_transcripts %>%
+#   select(`Scholar ID`) %>%
+#   unique() %>%
+#   anti_join(scholar_metadata, by= "Scholar ID")
+
+scholar_transcripts = scholar_metadata %>%
+  select(`Scholar ID`) %>%
+  inner_join(scholar_transcripts, by= "Scholar ID")
+```
+
+
+This dataset contains detailed information on 767 unique Scholars from the 2012-2018 cohorts regarding their performance in 20,649 individual courses throughout their college career. Of the unmatched students in the \texttt{Scholar Metadata} dataset, 192 are from the 2019 and 2020 cohorts (and so have not yet completed their first semester of college). 
+
+The following summary statistics report only on those Scholars who have completed at least one semester of college. For detailed information regarding the measures in this dataset, see Appendix II.
+
+### General Characteristics at a Glance
+- Scholars took an average of **4.05** courses each term.
+```{r avg-num-courses, eval=FALSE}
+# Average number of courses per semester
+scholar_transcripts %>%
+  group_by(`Transcript 18 ID`,) %>%
+  summarise(numCourses = n()) %>%
+  ungroup() %>%
+  summarise(`Average Number of Courses per Semester` = mean(numCourses),
+            sd = sd(numCourses, na.rm = TRUE),
+            n = n()) %>%
+  mutate(se = sd / sqrt(n),
+         lower.ci = `Average Number of Courses per Semester` - qt(1 - (0.05 / 2), n - 1) * se,
+         upper.ci = `Average Number of Courses per Semester` + qt(1 - (0.05 / 2), n - 1) * se,
+         `95% CI` = paste("[ ", signif(lower.ci, 3), ", ", signif(upper.ci, 3)," ]", sep = "")) %>%
+  select(`Average Number of Courses per Semester`, `95% CI`) 
+```
+
+- Table \ref{table:average-courseload} breaks this down by individual terms. We observed a heavier load during the traditional Fall and Spring semesters, with a lighter courseload during Summer and Winter terms across all cohorts, with the 2018 cohort taking a heavier overall courseload than any previous cohort:
+
+```{r avg-num-courses-by-term}
+
+scholar_metadata %>%
+  select(`Scholar ID`, Cohort) %>%
+  right_join(scholar_transcripts) %>%
+  group_by(`Cohort`, `Transcript Term`, `Transcript 18 ID`) %>%
+  summarise(numCourses = n()) %>%
+  ungroup() %>%
+  group_by(`Cohort`, `Transcript Term`) %>%
+  summarise(`Average Number of Courses per Term` = mean(numCourses)) %>%
+  ungroup() %>%
+  spread(`Transcript Term`, `Average Number of Courses per Term`) %>%
+  pander(split.cells = c(10,20,20,20,20),
+         caption = "\\label{table:average-courseload}Average Courseload by Academic Term")
+```
+
+- Out of the 767 Scholars in the dataset:
+
+    - 553 (72.1%) enrolled in at least one **Mathematics or Statistics course in their Freshman year**, earning an average normalized Course GPA of 2.78. Of the 1,037 Mathematics or Statistics courses taken by Scholars in their Freshman year, 60 resulted in withdrawl or failure.
+    
+```{r math_freshman-year,  echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+scholar_transcripts %>%
+  filter(`College Year` == "Freshman",
+         !is.na(`Math Category`)) %>%
+  select(`Scholar ID`) %>%
+  unique() %>%
+  summarise(n = n(),
+            prop = n/767)
+
+scholar_transcripts %>%
+  filter(`College Year` == "Freshman",
+         !is.na(`Math Category`)) %>%
+  summarise(n = n(),
+            withdrewOrFailed = sum(`Course Grade` %in% c("F", "Fail/No Credit", "Withdrawn")))
+
+scholar_transcripts %>%
+  filter(`College Year` == "Freshman",
+         !is.na(`Math Category`),
+         !(`Course Grade` %in% c("Pass/Credit", "Withdrawn"))) %>%
+  summarise(`Average Course GPA (Normalized)` = mean(`Course GPA (Normalized)`),
+            sd = sd(`Course GPA (Normalized)`, na.rm = TRUE),
+            n = n()) %>%
+  mutate(se = sd / sqrt(n),
+         lower.ci = `Average Course GPA (Normalized)` - qt(1 - (0.05 / 2), n - 1) * se,
+         upper.ci = `Average Course GPA (Normalized)` + qt(1 - (0.05 / 2), n - 1) * se,
+         `95% CI` = paste("[ ", signif(lower.ci, 3), ", ", signif(upper.ci, 3)," ]", sep = "")) %>%
+  select(`Average Course GPA (Normalized)`, `95% CI`) 
+```
+
+    - 474 (61.8%) enrolled in at least one **English or Literature course in their Freshman year**, earning an average normalized Course GPA of 3.28. Of the 717 English or Literature courses taken by Scholars in their Freshman year, 7 resulted in withdrawl or failure.
+    
+```{r english_freshman-year,  echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+scholar_transcripts %>%
+  filter(`College Year` == "Freshman",
+         grepl("ENGLISH LANGUAGE AND LITERATURE/LETTERS.", `NCES Major Category`)) %>%
+  select(`Scholar ID`) %>%
+  unique() %>%
+  summarise(n = n(),
+            prop = n/767)
+
+scholar_transcripts %>%
+  filter(`College Year` == "Freshman",
+         grepl("ENGLISH LANGUAGE AND LITERATURE/LETTERS.", `NCES Major Category`)) %>%
+  summarise(n = n(),
+            withdrewOrFailed = sum(`Course Grade` %in% c("F", "Fail/No Credit", "Withdrawn")))
+
+scholar_transcripts %>%
+  filter(`College Year` == "Freshman",
+         grepl("ENGLISH LANGUAGE AND LITERATURE/LETTERS.", `NCES Major Category`),
+         !(`Course Grade` %in% c("Pass/Credit", "Withdrawn"))) %>%
+  summarise(`Average Course GPA (Normalized)` = mean(`Course GPA (Normalized)`),
+            sd = sd(`Course GPA (Normalized)`, na.rm = TRUE),
+            n = n()) %>%
+  mutate(se = sd / sqrt(n),
+         lower.ci = `Average Course GPA (Normalized)` - qt(1 - (0.05 / 2), n - 1) * se,
+         upper.ci = `Average Course GPA (Normalized)` + qt(1 - (0.05 / 2), n - 1) * se,
+         `95% CI` = paste("[ ", signif(lower.ci, 3), ", ", signif(upper.ci, 3)," ]", sep = "")) %>%
+  select(`Average Course GPA (Normalized)`, `95% CI`) 
+```
+
+    - 127 (16.6%) enrolled in at least one **Computer Science course in their Freshman year**, earning an average normalized Course GPA of 2.84. Of the 209 Computer Science courses taken by Scholars in their Freshman year, 16 resulted in withdrawl or failure.
+    
+```{r cs_freshman-year,  echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+scholar_transcripts %>%
+  filter(`College Year` == "Freshman",
+         grepl("COMPUTER AND INFORMATION SCIENCES AND SUPPORT SERVICES.", `NCES Major Category`)) %>%
+  select(`Scholar ID`) %>%
+  unique() %>%
+  summarise(n = n(),
+            prop = n/767)
+
+scholar_transcripts %>%
+  filter(`College Year` == "Freshman",
+         grepl("COMPUTER AND INFORMATION SCIENCES AND SUPPORT SERVICES.", `NCES Major Category`)) %>%
+  summarise(n = n(),
+            withdrewOrFailed = sum(`Course Grade` %in% c("F", "Fail/No Credit", "Withdrawn")))
+
+scholar_transcripts %>%
+  filter(`College Year` == "Freshman",
+         grepl("COMPUTER AND INFORMATION SCIENCES AND SUPPORT SERVICES.", `NCES Major Category`),
+         !(`Course Grade` %in% c("Pass/Credit", "Withdrawn"))) %>%
+  summarise(`Average Course GPA (Normalized)` = mean(`Course GPA (Normalized)`),
+            sd = sd(`Course GPA (Normalized)`, na.rm = TRUE),
+            n = n()) %>%
+  mutate(se = sd / sqrt(n),
+         lower.ci = `Average Course GPA (Normalized)` - qt(1 - (0.05 / 2), n - 1) * se,
+         upper.ci = `Average Course GPA (Normalized)` + qt(1 - (0.05 / 2), n - 1) * se,
+         `95% CI` = paste("[ ", signif(lower.ci, 3), ", ", signif(upper.ci, 3)," ]", sep = "")) %>%
+  select(`Average Course GPA (Normalized)`, `95% CI`) 
+```
+
+    - 108 (14.1%) enrolled in at least one **Engineering course in their Freshman year**, earning an average normalized Course GPA of 3.3. Of the 208 Engineering courses taken by Scholars in their Freshman year, 5 resulted in withdrawl or failure.
+
+```{r engineering_freshman-year,  echo=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
+scholar_transcripts %>%
+  filter(`College Year` == "Freshman",
+         grepl("ENGINEERING.", `NCES Major Category`)) %>%
+  select(`Scholar ID`) %>%
+  unique() %>%
+  summarise(n = n(),
+            prop = n/767)
+
+scholar_transcripts %>%
+  filter(`College Year` == "Freshman",
+         grepl("ENGINEERING.", `NCES Major Category`)) %>%
+  summarise(n = n(),
+            withdrewOrFailed = sum(`Course Grade` %in% c("F", "Fail/No Credit", "Withdrawn")))
+
+scholar_transcripts %>%
+  filter(`College Year` == "Freshman",
+         grepl("ENGINEERING.", `NCES Major Category`),
+         !(`Course Grade` %in% c("Pass/Credit", "Withdrawn"))) %>%
+  summarise(`Average Course GPA (Normalized)` = mean(`Course GPA (Normalized)`),
+            sd = sd(`Course GPA (Normalized)`, na.rm = TRUE),
+            n = n()) %>%
+  mutate(se = sd / sqrt(n),
+         lower.ci = `Average Course GPA (Normalized)` - qt(1 - (0.05 / 2), n - 1) * se,
+         upper.ci = `Average Course GPA (Normalized)` + qt(1 - (0.05 / 2), n - 1) * se,
+         `95% CI` = paste("[ ", signif(lower.ci, 3), ", ", signif(upper.ci, 3)," ]", sep = "")) %>%
+  select(`Average Course GPA (Normalized)`, `95% CI`)
+```
+
+
+ - **STEM disciplines account for 40.2% of all course attempts**, and comprise 3 of the top 5 categories by Scholar enrollment (Table \ref{table:top-disciplines-by-enrollment}). 
+ - Scholars have an **overall pass rate of 97.3% across all disciplines**, and earn a **B or above in 64.4% of all course attempts**  (Table \ref{table:top-disciplines-by-enrollment}). 
+
+
+```{r top_disciplines}
+top_disciplines = scholar_transcripts %>%
+  mutate(`Discipline (NCES Categorization)` = str_replace_all(str_to_title(`NCES Major Category`), "And", "&")) %>%
+  filter(!is.na(`Discipline (NCES Categorization)`)) %>%
+  group_by(`Discipline (NCES Categorization)`) %>%
+  summarise(`Courses Attempted` = n(),
+          `Courses Passed` = sum(!(`Course Grade` %in% c("F", "Withdrawn", "Failed/No Credit"))),
+          `Failed / Withdrawn` = sum(`Course Grade` %in% c("F", "Failed/No Credit", "Withdrawn")),
+          `Pass Rate` = percent(`Courses Passed` / `Courses Attempted`),
+          `Earn B or above` = percent(sum(`Performance` %in% c("B+ or above", "B or above")) / `Courses Attempted`),
+          `Earn B+ or above` = percent(sum(`Performance` == "B+ or above") / `Courses Attempted`),
+          `Earn A- or above` = percent(sum(`Course GPA (Normalized)` >= 3.7) / `Courses Attempted`)) %>%
+  ungroup() %>%
+  arrange(desc(`Courses Attempted`)) %>%
+  select(-`Courses Attempted`) 
+
+top_disciplines %>%
+  head(5)%>%
+  pander(justify = c('left', 'center', 'center', 'center', 'center', 'center', 'center'),
+         split.cells = c(Inf, 10, 10, 8, 8, 8, 8),
+         caption = "\\label{table:top-disciplines-by-enrollment}Top Disciplines by Course Enrollment, with Metrics")
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, eval = FALSE}
+scholar_transcripts %>%
+  group_by(`STEM Course?`) %>%
+  summarise(n= n())
+
+scholar_transcripts %>%
+  summarise(`Pass Rate` = sum(!(`Course Grade` %in% c("F", "Withdrawn", "Failed/No Credit"))) / n(),
+            `Satisfactory Rate` = sum(Performance %in% c("B+ or above", "B or above")) / n())
+```
+
+There are three disciplines (Table \ref{table:lowBs}) in which Scholars earn a B or above in fewer than half of all attempts:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE,}
+top_disciplines %>%
+  filter(`Earn B or above` < 50) %>%
+  arrange(desc(`Earn B or above`)) %>%
+  head(10)%>%
+  pander(justify = c('left', 'center', 'center', 'center', 'center', 'center', 'center'),
+         split.cells = c(Inf, 10, 10, 8, 8, 8, 8),
+         caption = "\\label{table:lowBs}Disciplines with <50% satisfactory marks (B and above)")
+```
+
+\newpage
+Drilling down further, we observe that there are 6 individual courses (Table \ref{table:lowPass}) with a pass rate under 95%, all of them within STEM disciplines. (_Note: we consider only courses with at least 100 attempts._)
+
+```{r echo=FALSE, message=FALSE, warning=FALSE,}
+scholar_transcripts %>%
+  mutate(`NCES Course` = ifelse(`NCES Course` == "Multivariable Calculus.", "Calculus 2.", `NCES Course`)) %>%
+  group_by(`NCES Course`) %>%
+  summarise(`Courses Attempted` = n(),
+          `Courses Passed` = sum(!(`Course Grade` %in% c("F", "Withdrawn", "Failed/No Credit"))),
+          `Failed / Withdrawn` = sum(`Course Grade` %in% c("F", "Failed/No Credit", "Withdrawn")),
+          `Pass Rate` = percent(`Courses Passed` / `Courses Attempted`),
+          `Earn B or above` = percent(sum(`Performance` %in% c("B+ or above", "B or above")) / `Courses Attempted`),
+          `Earn B+ or above` = percent(sum(`Performance` == "B+ or above") / `Courses Attempted`),
+          `Earn A- or above` = percent(sum(`Course GPA (Normalized)` >= 3.7) / `Courses Attempted`)) %>%
+  ungroup() %>%
+  filter(`Courses Attempted` > 100,
+        `Failed / Withdrawn` > 0,
+        `Pass Rate` < 95) %>%
+  arrange(`Pass Rate`) %>%
+  select(-`Courses Attempted`) %>%
+  #head(10)%>%
+  pander(justify = c('left', 'center', 'center', 'center', 'center', 'center', 'center'),
+         split.cells = c(Inf, 10, 10, 8, 8, 8,8),
+         caption = "\\label{table:lowPass}Courses with <95% pass rate")
+```
+
+# Impact of the SCS Noonan Scholars Program
+
+In the following sections, we report on the overall impact the SCS Noonan Scholars Program has had on participating Scholars, and how that has evolved over the past 8 years. 
+
+## Where SCS Noonan Scholars Attend College
+Scholars are enrolling in increasingly selective colleges and universities. The 2019 cohort saw a dramatic shift in the caliber of postsecondary institutions into which Scholars ultimately enrolled (Table \ref{table-topschools}). More than **1 in 4 Scholars** in the 2019 cohort will be attending Ivy-Plus institutions[^1] in the Fall of 2019, and over **90%** will be attending a Top-100 institution.
+
+[^1]: The Ivy-Plus institutions are a collection of elite colleges and universities esteemed for their academic and professional excellence, intellectual curiosity, leadership and civic engagement. The twelve schools under this designation are: Brown University, Columbia University, Cornell University, Dartmouth College,  Harvard University, University of Pennsylvania,  Princeton University, Yale University, Stanford, Massachusetts Institute of Technology, University of Chicago, Duke University.
+
+```{r top100schools}
+scholar_metadata %>%
+  filter(Cohort < 2020) %>% # This cohort has not yet applied to college
+  group_by(Cohort) %>%
+  summarise(`% attending Ivy-Plus School` = percent(sum(IvyPlus)/n()),
+            `% attending Top-100 School` = percent(sum(`College Forbes Ranking 2018` <= 100, na.rm = TRUE)/n()),
+            `% missing` = percent(sum(is.na(`College Forbes Ranking 2018`)) / n())) %>%
+  pander(split.cells = c(10, 10, 10, 10),
+         caption = "\\label{table-topschools}% Scholars Attending Top Schools, by Cohort")
+```
+
+
+Scholars attend a wide variety of different colleges and universities (Table \ref{table:top-3-schools-by-cohort}). California institutions dominated the landscape in the early years of the program, shifting after the program went national in 2018.
+
+\newpage
+
+```{r}
+scholar_metadata %>%
+  filter(!is.na(`Scholar College`),
+         Cohort %in% c(2012, 2019)) %>%
+  rename(`Institution` = `Scholar College`) %>%
+  group_by(Cohort, `Institution`) %>%
+  summarise(`# Scholars Enrolled` = n()) %>%
+  arrange(desc(`# Scholars Enrolled`)) %>%
+  group_by(Cohort, `Institution` = factor(c(as.character(`Institution`)[1:10], rep("Other Institutions", n() - 10)),
+                            levels = c(as.character(`Institution`)[1:10], "Other Institutions"))) %>%
+  ungroup() %>%
+  group_by(Cohort) %>%
+  mutate(id = row_number(),
+         `Institution` = ifelse(Institution != "Other Institutions", paste(id, ". ", `Institution`, sep = ""), Institution)) %>%
+  group_by(Cohort, `Institution`) %>%
+  summarise(ninst = n(), `# Scholars Enrolled` = sum(`# Scholars Enrolled`)) %>%
+  mutate(Institution = ifelse(Institution == "Other Institutions", paste("&nbsp;&nbsp;&nbsp;&nbsp;(", ninst, " ", `Institution`, ")\\\n", sep = ""), Institution)) %>%
+  select(-ninst) %>%
+  pander(justify = c("center", "left", "center"),
+         caption = "\\label{table:top-3-schools-by-cohort}Top 10 Colleges or Universities by Enrollment, 2012 vs. 2019")
+  
+```
+
+<!--The mean time to graduation is **4.1 years** (4.2 years for STEM majors, and 4 years non-STEM majors), and **87.0% of all Scholar Alumni have graduated within four years**. Four-year graduation rates are remarkably consistent across demographics:
+
+ - Female and non-binary Scholar Alumnae: **89.7%**
+ - Hispanic or Latinx Scholar Alumni: **87.8**
+ - Black or African American Scholar Alumni: **85.0%**
+
+```{r timeToGraduationByMajor, eval = F}
+scholar_metadata %>%
+  filter(`Scholar Status` == "Scholar Alumni") %>%
+  group_by(Gender) %>%
+  summarise(`Average YTG` = signif(mean(`# Years of College`, na.rm = TRUE), 2),
+            sd = sd(`# Years of College`, na.rm = TRUE),
+            n = n(),
+            upTo4 = sum(`# Years of College` <= 4)/n())
+
+scholar_metadata %>%
+  filter(`Scholar Status` == "Scholar Alumni") %>%
+  group_by(`Hispanic or Latinx`) %>%
+  summarise(`Average YTG` = signif(mean(`# Years of College`, na.rm = TRUE), 2),
+            sd = sd(`# Years of College`, na.rm = TRUE),
+            n = n(),
+            upTo4 = sum(`# Years of College` <= 4)/n())
+
+scholar_metadata %>%
+  filter(`Scholar Status` == "Scholar Alumni") %>%
+  group_by(`Black or African American`) %>%
+  summarise(`Average YTG` = signif(mean(`# Years of College`, na.rm = TRUE), 2),
+            sd = sd(`# Years of College`, na.rm = TRUE),
+            n = n(),
+            upTo4 = sum(`# Years of College` <= 4)/n())
+
+```
+-->
+
+## Major Distribution
+
+Of the 902 Scholars that indicated an intended major, **516 (57.2%) intended to major in STEM fields**. Of these:
+
+ - 285 were female/non-binary (52.3% of Scholars coded as female/non-binary with an intended major). 
+ - 271 identify as Hispanic or Latinx (57.3% of Hispanic or Latinx Scholars with an intended major).
+ - 164 identify as Black or African American (58.8% of Black or African American Scholars with an intended major).
+
+
+The top 10 intended majors by popularity appear in Table \ref{table:top-intended}.
+```{r, eval = F}
+scholar_metadata %>%
+  filter(!is.na(`Intended Major`),
+         `Intended Major` != "Undecided",
+         `Intended Major` != "Undeclared.") %>%
+  group_by(`Intended Major STEM?`) %>%
+  summarise(n = n())
+
+scholar_metadata %>%
+  filter(!is.na(`Intended Major`),
+         `Intended Major` != "Undecided",
+         `Intended Major` != "Undeclared.") %>%
+  group_by(`Gender`, `Intended Major STEM?`) %>%
+  summarise(n = n())
+
+scholar_metadata %>%
+  filter(!is.na(`Intended Major`),
+         `Intended Major` != "Undecided",
+         `Intended Major` != "Undeclared.",
+         `Hispanic or Latinx` == 1) %>%
+  group_by(`Intended Major STEM?`) %>%
+  summarise(n = n())
+```
+
+```{r indended_majors}
+scholar_metadata %>%
+  mutate(`Intended Major` = str_replace_all(str_to_title(`Intended Major`), "And", "&"),
+         `Intended Major` = str_replace_all(str_to_title(`Intended Major`), "[.]", "")) %>%
+  separate(`Intended Major`, c("Intended Major", "Intended Major Detail"), ": ") %>%
+  mutate(`Intended Major` = ifelse(`Intended Major` == "Social Sciences",
+                                           "Economics, Sociology, Political Science, & Related Fields", `Intended Major`)) %>%
+  group_by(`Intended Major`) %>%
+  filter(!is.na(`Intended Major`),
+         !(`Intended Major` %in% c("Undecided", "Undeclared"))) %>%
+  summarise(`Number of Scholars` = n()) %>%
+  arrange(desc(`Number of Scholars`)) %>%
+  top_n(10) %>%
+  mutate(id = row_number(),
+         # Hack to deal with 2-way tie
+         id = ifelse(id != 9, paste(id, ". ", sep = ""), "&nbsp;&nbsp;&nbsp;&nbsp;"),
+         `Intended Major` = paste(id, `Intended Major`, sep = "")) %>%
+  select(-id) %>%
+  pander(justify = c('left', 'center'), 
+         split.cells = c(45, 20),
+         caption = "\\label{table:top-intended}Top Intended Majors by Popularity")
+```
+
+<!-- We observe only modest attrition in STEM majors upon graduation. Of the 355 Scholar Alumni, **185 (52.1%) graduated with a STEM degree**. Of these: -->
+
+<!--  - 126 were female (53.6% of Scholar Alumnae).  -->
+<!--  - 81 identify as Hispanic or Latinx (48.1% of Hispanic or Latinx Scholar Alumni). -->
+<!--  - 53 identify as Black or African American (50.0% of Black or African American Scholar Alumni). -->
+ 
+The top 10 majors at graduation by popularity appear in Table \ref{table:top-majors-grad}.
+
+```{r, eval = F}
+scholar_metadata %>%
+  filter(`Scholar Status` == "Scholar Alumni") %>%
+  filter(!is.na(`Current Major Category`),
+         `Current Major Category` != "Undeclared.") %>%
+  group_by(`Current Major STEM?`) %>%
+  summarise(n = n())
+
+scholar_metadata %>%
+  filter(`Scholar Status` == "Scholar Alumni") %>%
+  filter(!is.na(`Current Major Category`),
+         `Current Major Category` != "Undeclared.") %>%
+  group_by(`Gender`, `Current Major STEM?`) %>%
+  summarise(n = n())
+
+scholar_metadata %>%
+  filter(`Scholar Status` == "Scholar Alumni") %>%
+  filter(!is.na(`Current Major Category`),
+         `Current Major Category` != "Undeclared.",
+         `Black or African American` == 1) %>%
+  group_by(`Current Major STEM?`) %>%
+  summarise(n = n())
+
+scholar_metadata %>% 
+  filter(`Current Major Category` == "Social Sciences") %>% 
+  mutate(`Current Major` = str_replace_all(str_to_title(`Current Major`), "[.]", "")) %>%
+  group_by(`Current Major`) %>% 
+  summarise(n = n()) %>% 
+  arrange(desc(n))
+```
+
+
+```{r major_upon_graduation}
+scholar_metadata %>%
+  filter(`Scholar Status` == "Scholar Alumni") %>%
+  mutate(`Current Major Category` = str_replace_all(str_to_title(`Current Major Category`), "And", "&"),
+         `Current Major Category` = ifelse(`Current Major Category` == "Social Sciences",
+                                           "Economics, Sociology, Political Science, and Related Fields", `Current Major Category`)) %>%
+  #separate(`Current Major Category`, c("Current Major Category", "Current Major Detail"), ": ") %>%
+  group_by(`Current Major Category`) %>%
+  filter(!is.na(`Current Major Category`),
+         `Current Major Category` != "#N/A",
+         `Current Major Category` != "Undeclared.") %>%
+  summarise(`Number of Scholars` = n()) %>%
+  arrange(desc(`Number of Scholars`)) %>%
+  top_n(10) %>%
+  mutate(id = row_number(),
+         # Hack to deal with 2-way tie
+         id = ifelse(! (id %in% c(11,12)), paste(id, ". ", sep = ""), "&nbsp;&nbsp;&nbsp;&nbsp;"),
+         `Current Major Category` = paste(id, `Current Major Category`, sep = "")) %>%
+  select(-id) %>%
+  pander(justify = c('left', 'center'), 
+         split.cells = c(45, 20),
+         caption = "\\label{table:top-majors-grad}Top 10 Majors Upon Graduation by Popularity")
+```
+
+
+## Scholar Graduation Rate
+The six-year college graduation rate of the Scholars contained in the provided datasets is **98.2%** (calculated for 2012 and 2013 cohorts only), and the four-year graduation rate is **83.3%**. Table \ref{table:4yr-grad-rate} breaks this figure down by cohort, and was prepared using a Scholar's status (\texttt{Scholar Alumni} or \texttt{Current Scholar}) as an indicator of whether or not they had completed their degree. Scholars in cohorts later than 2015 have not yet reported their degrees, and so are omitted from this analysis. The \texttt{\% missing} column details the proportion of Scholars in each cohort whose listed \texttt{College Graduation Year} is 2019 or earlier, but whose degrees have not yet been confirmed.
+
+```{r timeToGraduation}
+scholar_metadata %>%
+  filter(Cohort < 2014) %>% # More recent Cohorts have not had 4 years of college yet
+  group_by(Cohort) %>%
+  mutate(year = as.numeric(substr(`College Graduation Year`, 0, 4))) %>%
+  summarise(`Degree in <= 4 Years` = percent(sum(`Scholar Status` == "Scholar Alumni" & 
+                                                   year < 2020  & `# Years of College` <= 4) / n()),
+            `Degree in <= 5 Years` = percent(sum(`Scholar Status` == "Scholar Alumni" & 
+                                                year < 2020 & `# Years of College` <= 5) / n()),
+            `Degree in <= 6 Years` = percent(sum(`Scholar Status` == "Scholar Alumni" & 
+                                                year < 2020 & `# Years of College` <= 6) / n()),
+            `Degree in > 6 Years` = percent(sum(`Scholar Status` == "Scholar Alumni" & 
+                                                  year < 2020 & `# Years of College` > 6) / n()),
+            `Still in school as of August 2019` = percent(sum(year > 2019) / n()),
+            `% missing` = percent(sum(year < 2020 & `Scholar Status` == "Current Scholar") / n())) %>%
+  #mutate(`Degree in > 6 Years` = ifelse(2019 - Cohort <= 6, NA, `Degree in > 6 Years`)) %>%
+  #mutate(`Degree in <= 6 Years` = ifelse(2019 - Cohort <= 5, NA, `Degree in <= 6 Years`)) %>%
+  #mutate(`Degree in <= 5 Years` = ifelse(2019 - Cohort <= 4, NA, `Degree in <= 5 Years`)) %>%
+  pander(split.cells = c(10, 8, 8, 8, 10, 10),
+         caption = "\\label{table:4yr-grad-rate}% Scholars Graduating, by # Years, by Cohort")
+```
+
+All 33 Scholars from the 2012 and 2013 cohorts that attended Top-100 Schools graduated within 6 years. According to data made available through the National Center for Education's Integrated Postsecondary Education Data System (IPEDS), the 6-year graduation rate for all students attending Forbes 2018 Top-100 ranked schools is 89%: SCS Noonan Scholars graduate at a rate **10.7\% higher than the average students** enrolled at the nation's most competitive institutions.
+
+```{r timeToGraduation-top100}
+scholar_metadata %>%
+  filter(Cohort < 2014,
+         `College Forbes Ranking 2018` <= 100) %>% # More recent Cohorts have not had 4 years of college yet
+  #group_by(Cohort) %>%
+  mutate(year = as.numeric(substr(`College Graduation Year`, 0, 4))) %>%
+  summarise(`Degree in <= 4 Years` = percent(sum(`Scholar Status` == "Scholar Alumni" & 
+                                                   year < 2020  & `# Years of College` <= 4) / n()),
+            `Degree in <= 5 Years` = percent(sum(`Scholar Status` == "Scholar Alumni" & 
+                                                year < 2020 & `# Years of College` <= 5) / n()),
+            `Degree in <= 6 Years` = percent(sum(`Scholar Status` == "Scholar Alumni" & 
+                                                year < 2020 & `# Years of College` <= 6) / n()),
+            `Degree in > 6 Years` = percent(sum(`Scholar Status` == "Scholar Alumni" & 
+                                                  year < 2020 & `# Years of College` > 6) / n()),
+            `Still in school as of August 2019` = percent(sum(year > 2019) / n()),
+            `% missing` = percent(sum(year < 2020 & `Scholar Status` == "Current Scholar") / n()),
+            n = n()) %>%
+  #mutate(`Degree in > 6 Years` = ifelse(2019 - Cohort <= 6, NA, `Degree in > 6 Years`)) %>%
+  #mutate(`Degree in <= 6 Years` = ifelse(2019 - Cohort <= 5, NA, `Degree in <= 6 Years`)) %>%
+  #mutate(`Degree in <= 5 Years` = ifelse(2019 - Cohort <= 4, NA, `Degree in <= 5 Years`)) %>%
+  pander(split.cells = c(10, 8, 8, 8, 10, 10),
+         caption = "\\label{table:4yr-grad-rate}% Scholars Graduating, by # Years, by Cohort")
+```
+
+## Scholar Grades
+Across all cohorts, **68.7%** of Scholars have a collegiate GPA above 3.0 (Table \ref{table:gpa-3-and-above}):
+
+- For female Scholars, the rate is **71.9%** 
+- For Black, African American, Hispanic, and Latinx Scholars, the rate is **66.6%**
+
+
+```{r 3.0orAbove}
+scholar_metadata %>%
+  filter(`# Years of College` > 1) %>%
+  group_by(Cohort) %>% 
+  summarise("Average GPA" = mean(`Reported Total GPA`, na.rm = TRUE),
+            "Current GPA >= 3.0" = percent(sum(`Reported Total GPA` >= 3.0, na.rm = TRUE) / n()),
+            "Current GPA < 3.0" = percent(sum(`Reported Total GPA` < 3.0, na.rm = TRUE) / n()),
+            "Missing Current GPA" = paste(sum(is.na(`Reported Total GPA`)), "/", n()),
+            "Number Graduated to Date" = paste(sum(`Scholar Status` == "Scholar Alumni", na.rm = T), "/", n())
+            ) %>%
+  pander(caption = "\\label{table:gpa-3-and-above}Proportion of Scholars with a Collegiate GPA >= 3.0")
+```
+
+## STEM Persistence
+
+Across all cohorts, **64.5%** of Scholars who intend to major in STEM go on to graduate with a STEM degree (Table \ref{table:STEMpersistence}):
+
+- For female Scholars, the rate is **58.6%**.
+- For Black and African American scholars, the rate is **57.7%**,
+- For Hispanic and Latinx Scholars, the rate is **64.0%**.
+
+
+```{r STEMpersistence}
+scholar_metadata %>%
+  filter(Cohort < 2019,
+         `Scholar Status`== "Scholar Alumni",
+         `STEM Persistence` %in% c("Persisted in STEM", "Dropped STEM")) %>%
+  group_by(Cohort, `STEM Persistence`) %>%
+  summarise(n = n()) %>%
+  spread(key = `STEM Persistence`, value = n) %>%
+  mutate(`Dropped STEM` = replace_na(`Dropped STEM`, 0),
+         `# Persisted in STEM` = paste(`Persisted in STEM`, "/", `Persisted in STEM` + `Dropped STEM`),
+         `% Persisted in STEM` = percent(`Persisted in STEM` / (`Persisted in STEM` + `Dropped STEM`))) %>%
+  select(-`Dropped STEM`, -`Persisted in STEM`) %>%
+  pander(caption = "\\label{table:STEMpersistence}STEM Persistence, by Cohort",
+         split.cells = c(10,10,10))
+```
+
+# Impact of Summer Academy on Academic Performance {#impact-overall}
+
+## The Origin of Summer Academy
+
+Several years into the development of the program, organizers observed that a nontrivial number of Scholars were transitioning out of their intended majors after struggling academically during their Freshman year. Specifically, they were concerned by the perceived trend that Scholars were abandoning traditionally rigorous majors about which they felt passionate, and moving into fields of study in which they believed they could achieve a higher GPA regardless of whether that discipline held their interest. 
+
+The organizers hypothesized that a gap in academic preparedness was in part responsible for Scholars' early challenges in collegiate environments, specifically in the areas of mathematics and writing. The Summer Academy program was launched in 2012 in an effort to bridge this gap. In this section, we attempt to quantify the impact of this program with respect to Scholars' post-secondary academic performance.
+
+Table \ref{table:SA-participation} illustrates the growth of participation in the Summer Academy program since its inception in 2012. In earlier years, each cohort was triaged to identify Scholars who would most benefit from additional support through this program. The 2012 cohort, which was the first cohort to participate in Summer Academy, only had the opportunity to attend a single session prior to leaving for college. In later years,  all Scholars were strongly encouraged to attend, and some had the opportunity to attend a second session.
+
+```{r SA_participation}
+scholar_metadata %>%
+  filter(Cohort < 2020) %>%
+  group_by(Cohort, `# SA Cohorts`) %>%
+  summarise(n = n()) %>%
+  spread(key = `# SA Cohorts`, value = n) %>%
+  mutate(SA0perc = `0` / sum(`0`,`1`,`2`, na.rm = T),
+         SA1perc = `1` / sum(`0`,`1`,`2`, na.rm = T),
+         SA2perc = `2` / sum(`0`,`1`,`2`, na.rm = T),
+         `0` = ifelse(!is.na(`0`), 
+                  paste(`0`, " Scholars (", percent(SA0perc, 2), ")", sep = ""),            
+                  NA),
+         `1` = ifelse(!is.na(`1`), 
+                  paste(`1`, " Scholars (", percent(SA1perc, 2), ")", sep = ""), 
+                  NA),
+         `2` = ifelse(!is.na(`2`), paste(`2`, " Scholars (", percent(SA2perc, 2), ")", sep = ""), NA))%>%
+  rename(`Did not attend Summer Academy` = `0`,
+         `Attended 1 Session of Summer Academy` = `1`,
+         `Attended 2 Sessions of Summer Academy` = `2`) %>%
+  select(-SA0perc, -SA1perc, -SA2perc) %>%
+  pander(split.cells = c(7,15,15,15),
+         caption = "\\label{table:SA-participation}Participation in Summer Academy, by Cohort")
+```
+
+During their first session of Summer Academy, all Scholars took one course in Calculus-based mathematics and one course in college-level writing. Beginning in 2014, those that attended a second session in Los Angeles had the option to select a Chemistry elective in lieu of either mathematics of writing. In 2015, a second elective in Computer Science was added. In 2018, the Chemistry elective was discontinued.
+
+```{r electives, eval=FALSE}
+scholar_metadata %>%
+  filter(Cohort >= 2014,
+         Cohort <= 2018) %>%
+  group_by(Cohort) %>%
+  #filter(`# SA Cohorts` == 2) %>%
+  summarise(`Number in Cohort` = n(),
+            `Opted-In to Chemistry` = sum(`SA Chemistry`),
+            `Opted-In to CS` = ifelse(sum(`SA Computer Science`)>0,sum(`SA Computer Science`), NA )) %>%
+  pander()
+```
+
+
+
+## Confounding Factors
+The question of whether or not participation in Summer Academy is correlated with improved post-secondary outcomes is somewhat complex, due in large part to the absence of an appropriate control group:
+
+- Because Scholars in this program are statistical outliers in their academic achievement prior to their enrollment, and because systemic racism and classism heavily influence access to education, **comparison with national averages** for students with similar socioeconomic, racial, and ethnic demographics is not appropriate.
+- Because they attend such a wide variety of postsecondary institutions (many of which have historically had substantial underrepresentation of low income students and students of color), a **comparison with similar students at the same institution** is not possible.
+- Because the program has evolved so much in the past several years, even a **comparison between Scholars who did and did not attend Summer Academy** can prove problematic if not approached with care.
+
+For example, because of the targeted recruitment strategy for earlier cohorts and the later shift toward required participation for all Scholars, the probability that an individual Scholar participated in Summer Academy grows each year (regardless of other factors). The logistic regression line in Figure 3 captures this pattern. 
+
+_Note: for illustrative purposes, each black point represents an individual Scholar from the cohort, and the position encodes the true outcome: if the Scholar attended Summer Academy then the corresponding point appears at 100%, and if the Scholar did not attend Summer Academy, then the point appears at 0%._ 
+
+\vspace{0.5em}
+
+```{r PR_attend_SA_cohort, fig.height = 3.5, fig.width = 6.3, fig.align = "left"}
+# Each year, the probability of attending SA increases
+scholar_metadata %>%
+  mutate(`Attended SA?` = ifelse(`# SA Cohorts` > 0, 1, 0)) %>%
+  filter(Cohort < 2020) %>%
+  ggplot(aes(x=Cohort, y=`Attended SA?`)) + 
+    geom_point(position = position_jitter(w = 0.2, h = 0.02), pch = 21, size = 0.2) + 
+    stat_smooth(method="glm", method.args=list(family="binomial"))+
+    ylab(NULL)+
+    scale_y_continuous(labels = scales::percent, limits = c(0,1), expand=c(0,0.05)) +
+  xlab("Fig. 3 Logistic Regression: Probability of Attending SA by Cohort") +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=0.5),
+        axis.title.x = element_text(color = "grey20", size = 10, angle = 0, hjust = .5, vjust = 0, face = "plain", family="Times"))
+```
+
+Similarly, for the first several years of the program, Scholars were selected for participation in Summer Academy specifically because they needed additional support. This suggests that in the years where Summer Academy was optional (prior to the 2019 Cohort), the probability that an individual Scholar participates in Summer Academy would decrease the more academically-prepared they were at the time of recruitment. The Scholar's performance on standardized testing could serve as one proxy measure for this (Figure 4).
+
+\vspace{0.5em}
+
+```{r PR_attend_SA_cohort_SAT, fig.height = 3.5, fig.width = 6.3, fig.align = "left"}
+# SAT up, SA down
+scholar_metadata %>%
+  mutate(`Attended SA?` = ifelse(`# SA Cohorts` > 0, 1, 0)) %>%
+  filter(Cohort < 2019,
+         `SAT Percentile` > 10) %>%
+  ggplot(aes(x=(`SAT Percentile`), y=`Attended SA?`)) + 
+    geom_point(position = position_jitter(w = 0.2, h = 0.02), pch = 21, size = 0.2) + 
+    stat_smooth(method="glm", method.args=list(family="binomial"))+
+    ylab(NULL)+
+    scale_y_continuous(labels = scales::percent, limits = c(0,1), expand=c(0,0.05)) +
+  xlab("Fig. 4 Logistic Regression: Probability of Attending SA by SAT Percentile") +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=0.5),
+        axis.title.x = element_text(color = "grey20", size = 10, angle = 0, hjust = .5, vjust = 0, face = "plain", family="Times"))
+``` 
+
+However, this isn't quite the whole story:
+
+ - Using Pearson's method we also observe a **weak positive correlation** (0.1924, p < 0.0001) between SAT Percentile and Reported Total GPA: as SAT scores increase, so does college GPA.
+
+```{r SAT_vs_GPA, eval = F}
+scholar_metadata %>%
+  select(`SAT Percentile`, `Reported Total GPA`) %>%
+  drop_na()  %$% # thanks magrittr!
+  cor.test(`SAT Percentile`, `Reported Total GPA`) %>%
+  pander(caption = "Pearson's correlation between SAT Percentile and GPA",
+         split.cells = c(10, 10,15,10,10))
+```
+
+ - Intuitively, there is also **moderate negative correlation** between SAT scores and College Ranking (-0.4166, p < 0.0001): as SAT scores increase, the Scholar's chosen college is ranked closer to number 1.
+
+```{r SAT_vs_SchoolRank, eval = F}
+scholar_metadata %>%
+  select(`SAT Percentile`, `College Forbes Ranking 2018`) %>%
+  drop_na()  %$% # thanks magrittr!
+  cor.test(`SAT Percentile`, `College Forbes Ranking 2018`) %>%
+  pander(caption = "Pearson's correlation between SAT Percentile and College Ranking",
+         split.cells = c(10, 10,15,10,10))
+```
+
+ - However, we also observe is a **weak negative correlation** between (the log of) College Ranking and a Scholar's GPA (-0.1739, p < 0.0001): as the school's ranking gets closer to 1, their GPA goes down. 
+
+```{r SchoolRank_vs_GPA, eval = F}
+scholar_metadata %>%
+  select(`Reported Total GPA`, `College Forbes Ranking 2018`) %>%
+  drop_na()  %$% # thanks magrittr!
+  cor.test(log10(`College Forbes Ranking 2018`), `Reported Total GPA`) %>%
+  pander(caption = "Pearson's correlation between GPA and College Ranking",
+         split.cells = c(10, 10,15,10,10))
+```
+
+This implies that while higher SAT scores predispose a Scholar to enrolling in a higher-ranked college, as well as indicate prior preparation that equips them to do better on average in school than someone with a lower score, the decision to attend a higher-ranked school is related to lower overall GPAs. Because of the interrelationship between the aforementioned variables, the subsequent analysis will attempt to capture the impact of Summer Academy **in the context of** these factors rather than in isolation.
+
+## Impact on Overall Academic Performance
+In this  section, we consider the relationship between participation in Summer Academy and general academic performance in college. For this analysis, we will consider only Scholars whose status is listed as \texttt{Scholar Alumni}. When we account for each Scholar's SAT Percentile as well as the selectivity of their College:
+
+- We observe **a statistically significant relationship between the number of sessions of Summer Academy a Scholar attends and their overall performance in college** ($p<0.00001$). 
+- The coefficient suggests that we would expect to see **an average increase of 0.058** in overall GPA upon graduation for those who attend one session of Summer Academy, and **an average increase of 0.193** for those who attend two sessions of Summer Academy.
+- For **female Scholars**, these gains are even more substantial: we would expect to see **an average increase of 0.128** in overall GPA upon graduation for those who attend one session of Summer Academy, and **an average increase of 0.253** for those who attend two sessions of Summer Academy ($p < 0.0001$).
+- Scholars who identify as **Black, African American, Hispanic, or Latinx** reap benefits comparable to the overall collection of Scholars: we would expect to see **an average increase of 0.053** in overall GPA upon graduation for those who attend one session of Summer Academy, and **an average increase of 0.206** for those who attend two sessions of Summer Academy.
+
+```{r SA_to_overall_performance, eval = F}
+overall_performance = scholar_transcripts %>%
+   left_join(scholar_metadata) %>%
+   filter(`Scholar Status` == "Scholar Alumni") %>%
+  select(`Reported Total GPA`, `# SA Cohorts`, `SAT Math`, `SAT Percentile`, `College Forbes Ranking 2018`) %>%
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years")),
+         `College Forbes Ranking (log scale)` = log10(`College Forbes Ranking 2018`))
+
+lm_overall_by_SA = lm(`Reported Total GPA` ~ `# SA Cohorts` + `SAT Percentile` + `College Forbes Ranking (log scale)`, data = overall_performance)
+pander(lm_overall_by_SA,
+       caption = "\\label{lr-overall-gpa}Linear Regression of Overall GPA upon Graduation",
+       split.cells = c(10,10,10,10,10))
+
+overall_performance_women = scholar_transcripts %>%
+   left_join(scholar_metadata) %>%
+   filter(`Scholar Status` == "Scholar Alumni",
+          Gender == "Female") %>%
+  select(`Reported Total GPA`, `# SA Cohorts`, `SAT Math`, `SAT Percentile`, `College Forbes Ranking 2018`) %>%
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years")),
+         `College Forbes Ranking (log scale)` = log10(`College Forbes Ranking 2018`))
+
+lm_overall_by_SA_women = lm(`Reported Total GPA` ~ `# SA Cohorts` + `SAT Percentile` + `College Forbes Ranking (log scale)`, data = overall_performance_women)
+pander(lm_overall_by_SA_women,
+       caption = "\\label{lr-overall-gpa}Linear Regression of Overall GPA upon Graduation for Women",
+       split.cells = c(10,10,10,10,10))
+
+overall_performance_black_latinx = scholar_transcripts %>%
+   left_join(scholar_metadata) %>%
+   filter(`Scholar Status` == "Scholar Alumni",
+          (`Black or African American` == 1 |
+             `Hispanic or Latinx` == 1)) %>%
+  select(`Reported Total GPA`, `# SA Cohorts`, `SAT Math`, `SAT Percentile`, `College Forbes Ranking 2018`) %>%
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years")),
+         `College Forbes Ranking (log scale)` = log10(`College Forbes Ranking 2018`))
+
+lm_overall_by_SA_black_latinx = lm(`Reported Total GPA` ~ `# SA Cohorts` + `SAT Percentile` + `College Forbes Ranking (log scale)`, data = overall_performance_black_latinx)
+pander(lm_overall_by_SA_black_latinx,
+       caption = "\\label{lr-overall-gpa}Linear Regression of Overall GPA upon Graduation for Black and Latinx Scholars",
+       split.cells = c(10,10,10,10,10))
+```
+
+
+## Impact on Mathematics Performance
+
+### Overall Mathematics Performance
+
+We observe several patterns in Scholar's performance in mathematics courses across **all years of college** (Table \ref{table:math-performance}):
+
+- Scholars who participated in Summer Academy **enrolled in Calculus I** at some point in their college careers at a higher rate than those who did not participate in Summer Academy.
+- Scholars **earned a B or above more frequently in all categories of mathematics** when they had taken at least one session of Summer Academy.
+- Scholars also **earned a B+ or above more frequently in all categories of mathematics** when they had taken at least one session of Summer Academy.
+- Those gains were most striking in higher level mathematics courses (levels C and above), but this may be an artifact of relatively small $n$.
+
+```{r}
+math_courses = scholar_metadata %>%
+  left_join(scholar_transcripts) %>%
+  filter(Cohort < 2018,
+         !is.na(`Math Category`)) %>%
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years"))) #%>%
+  #mutate(`# SA Cohorts` = ifelse(`# SA Cohorts` == "No SA", "No SA", "At least one year"))
+
+
+# Course attempts, by SA and # SA Cohorts
+scholar_metadata %>%
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years"))) %>%
+  #mutate(`# SA Cohorts` = ifelse(`# SA Cohorts` == "No SA", "No SA", "At least one year")) %>%
+  group_by(`# SA Cohorts`) %>%
+  summarise(nTotal = n()) %>%
+  left_join(
+    math_courses %>%
+    #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+    group_by(`Math Category`,`Scholar ID`, `# SA Cohorts`) %>%
+    summarise(nCoursesTaken = n(),
+              nCoursesFailed = sum(`Course GPA (Normalized)` == 0 &
+                                   !(`Course Grade` == "Pass/Credit")),
+              nWithdrawls = sum(`Course Grade` == "Withdrawn"),
+              nBorHigher = sum(Performance %in% c("B or above", "B+ or above")),
+              nBplusOrHigher = sum(Performance == "B+ or above"),
+              nA = sum(`Course GPA (Normalized)` >= 3.7)) %>%
+    #group_by(`SAT Group`) %>%  # Uncomment to break down by SAT Group
+    mutate(`Attend SA?` = ifelse(`# SA Cohorts` != 0, "Attended SA", "Did not attend")) %>%
+    group_by(`Math Category`,`# SA Cohorts`) %>%
+    summarise(`Unique Scholars taking Math Course` = n(),
+              `Attempts` = sum(nCoursesTaken),
+              `Failed` = sum(nCoursesFailed),
+              `Withdrawls` = sum(nWithdrawls),
+              `Pass Rate` = percent((`Attempts` - `Failed` - `Withdrawls`) / `Attempts`),
+              `Earn B or above` = percent(sum(nBorHigher)/`Attempts`),
+              `Earn B+ or above` = percent(sum(nBplusOrHigher)/`Attempts`),
+              `Earn A- or above` = percent(sum(nA)/`Attempts`))) %>%
+   mutate(Proportion = percent(`Unique Scholars taking Math Course` / nTotal),
+          `Avg. # Courses per Scholar` = round(`Attempts` / `Unique Scholars taking Math Course`, 1)) %>%
+  unite(`Scholars taking Math Course`, `Unique Scholars taking Math Course`, nTotal, sep = " / ") %>%
+  unite(`Scholars taking Math Course`, `Scholars taking Math Course`, Proportion, sep = " = ") %>%
+   select(`Math Category`,  `# SA Cohorts`, `Scholars taking Math Course`, `Avg. # Courses per Scholar`, `Pass Rate`, `Earn B or above`, `Earn B+ or above`, `Earn A- or above`) %>%
+  arrange(`Math Category`) %>%
+  mutate(`Math Category` = factor(`Math Category`, levels = c("A", "B1", "B2", "C", "D", "E", "O"),
+                                  labels = c("Pre-calculus Math", "Calculus I", "Calculus II", 
+                                                              "Intermediate Math (200+)", 
+                                                              "Advanced Math (300+)", "Statistics", "Other"))) %>%
+   pander(split.cells = c(30,10,20,10,10,10,10),
+          caption = "\\label{table:math-performance}Performance in Math Courses: All Years")
+```
+
+```{r}
+# Course attempts, by SA and # SA Cohorts
+scholar_metadata %>%
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years"))) %>%
+  group_by(`# SA Cohorts`) %>%
+  summarise(nTotal = n()) %>%
+  left_join(
+    math_courses %>%
+    #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+    mutate(`Math Category` = ifelse(`Math Category` %in% c("B1", "B2", "C"), "Calculus-Based",
+                                    ifelse(`Math Category` == "E", "Statistics-Based", "Other"))) %>%
+    filter(`Math Category` != "Other") %>%
+    group_by(`Math Category`,`Scholar ID`, `# SA Cohorts`)) %>%
+  select(`Cohort`, `Scholar ID`, `Math Category`) %>%
+  unique() %>%
+  mutate(count = 1) %>%
+  spread(`Math Category`, count) %>%
+  mutate(`Calculus-Based` = replace_na(`Calculus-Based`, 0),
+         `Statistics-Based` = replace_na(`Statistics-Based`, 0)) %>%
+  #group_by(Cohort) %>%
+  summarise(`# Taking Calculus-Based Courses` = sum(`Calculus-Based`),
+            `# Taking Statistics-Based Courses` = sum(`Statistics-Based`))
+```
+
+
+### Freshman Performance in the Introductory Calculus Series
+
+In this section, we consider the relationship between participation in Summer Academy and performance in the introductory Calculus series: Calculus I and 2. Table \ref{table:calc-enrollment} demonstrates that enrollment in the introductory Calculus series during Freshman year was robust across all cohorts through 2017 (the most recent cohort for which complete data is available on Summer Academy participation).
+
+```{r}
+calc_courses = scholar_metadata %>%
+  left_join(scholar_transcripts) %>%
+  filter(Cohort < 2018,
+         `Math Category` %in% c("B1", "B2"),
+         `College Year` == "Freshman") %>%
+  mutate(`Math Category` = factor(`Math Category`, levels = c("B1", "B2"), labels = c("Calculus I", "Calculus II")),
+         `# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years")))
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+calc_courses %>%
+  group_by(Cohort, `Math Category`) %>%
+  summarise(n = n()) %>%
+  spread(key = Cohort, value = n) %>%
+  pander(caption = "\\label{table:calc-enrollment}Freshman Enrollment in Introductory Calculus Series",
+         split.cells = c(15,10,10,10,10,10,10))
+```
+
+
+```{r, eval = F}
+# Unique Scholars
+calc_courses %>%
+  select(`Scholar ID`, `# SA Cohorts`) %>%
+  unique() %>%
+  summarise(n=n())
+
+# Attempts
+calc_courses %>%
+   group_by(`# SA Cohorts`) %>%
+   summarise(n=n())
+
+# Average GPA
+calc_courses %>%
+   filter(!(`Course Grade` %in% c("Pass/Credit", "Withdrawn"))) %>%
+   summarise(ci = list(mean_cl_normal(`Course GPA (Normalized)`) %>% 
+                        rename(`Average Course GPA`=y, lwr=ymin, upr=ymax))) %>%
+  unnest()
+
+
+calc_courses %>%
+   summarise(nAttempts = n(),
+             nCoursesFailed = sum(`Course GPA (Normalized)` == 0 &
+                                    !(`Course Grade` == "Pass/Credit")),
+             nCoursesPassed = nAttempts - nCoursesFailed,
+             `Pass Rate` = percent(nCoursesPassed / nAttempts),
+             `Earn B or above` = percent(sum(Performance %in% c("B+ or above", "B or above")) / nAttempts),
+             `Earn B+ or above` = percent(sum(Performance == "B+ or above") / nAttempts),
+             `Earn A- or above` = percent(sum(`Course GPA (Normalized)` >= 3.7) / nAttempts)
+             ) %>%
+   select(`Pass Rate`, `Earn B or above`, `Earn B+ or above`, `Earn A- or above`)
+```
+
+A total of 379 unique Scholars took a total of 577 introductory Calculus courses during their Freshman year:
+
+- They earned an average course GPA of 2.75. 
+- They had a pass rate of 94.3%
+- 50.8% of attempts earned a B or above 
+- 34.3% of attempts earned a B+ or above
+- 24.4% of attempts earned an A- or above.
+
+Of these Scholars:
+
+- 267 attended one session of Summer Academy.
+- 114 attended two sessions of Summer Academy.
+- 196 did not attend Summer Academy. 
+
+Table \ref{table:calc-freshman-fall} demonstrates the **modest increase in the proportion of Scholars attempting Calculus I**  during their first semester of college when they were exposed to Calculus during Summer Academy, as well as an **increase in the proportion of Scholars earning grades in each of the following three categories: B or above, B+ or above, and A**.
+
+```{r}
+# Course attempts, by SA and Course Level
+scholar_metadata %>%
+  #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years"))) %>%
+  group_by(`# SA Cohorts`) %>%
+  summarise(nTotal = n()) %>%
+  left_join(
+    calc_courses %>%
+    filter(`College Year` == "Freshman",
+           `Transcript Term` == "Fall",
+           `Math Category` == "Calculus I") %>%
+    #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+    group_by(`Scholar ID`, `# SA Cohorts`) %>%
+    summarise(nCoursesTaken = n(),
+              nCoursesFailed = sum(`Course GPA (Normalized)` == 0 &
+                                   !(`Course Grade` == "Pass/Credit")),
+              nWithdrawls = sum(`Course Grade` == "Withdrawn"),
+              nSatisfactory = sum(`Course GPA (Normalized)` >= 3),
+              nBplus = sum(`Course GPA (Normalized)` >= 3.3),
+              nA = sum(`Course GPA (Normalized)` >= 3.7)
+              ) %>%
+    #group_by(`SAT Group`) %>%  # Uncomment to break down by SAT Group
+    group_by(`# SA Cohorts`) %>%
+    summarise(`Unique Scholars taking Course` = n(),
+              `Attempts` = sum(nCoursesTaken),
+              `Failed` = sum(nCoursesFailed),
+              `Withdrawls` = sum(nWithdrawls),
+              `Pass` = `Attempts` - `Failed` - `Withdrawls`,
+              `Earn B or above` = percent(sum(nSatisfactory) / Attempts),
+              `Earn B+ or above` = percent(sum(nBplus) / Attempts),
+              `Earn A- or above` = percent(sum(nA) / Attempts),
+              `Pass Rate` = percent(Pass / Attempts))) %>%
+   mutate(Proportion = percent(`Unique Scholars taking Course` / nTotal),
+          `Avg. # Courses per Scholar` = signif(`Attempts` / `Unique Scholars taking Course`, 2)) %>%
+  unite(`Scholars taking Course`, `Unique Scholars taking Course`, nTotal, sep = " / ") %>%
+  unite(`Scholars taking Course`, `Scholars taking Course`, Proportion, sep = " = ") %>%
+   select(`# SA Cohorts`, `Scholars taking Course`, `Pass Rate`, `Earn B or above`, `Earn B+ or above`, `Earn A- or above`) %>%
+   pander(split.cells = c(15,25,25,25,25,25,25),
+          caption = "\\label{table:calc-freshman-fall}Performance of Scholars taking Calculus: Freshman Fall")
+```
+
+
+```{r SA_to_calc_performance_jim, , eval = F}
+lm_Calc_by_SA = lm(`Course GPA (Normalized)` ~ `# SA Cohorts` + `SAT Math` + log10(`College Forbes Ranking 2018`),
+                       data = calc_courses)
+pander(lm_Calc_by_SA,
+       caption = "Linear regression model for Calculus Performance (SCS Math Category Method)",
+       split.cells = c(20,20,20, 20, 20))
+```
+
+
+## Freshman Performance in Writing-Intensive Courses
+
+```{r}
+writing_courses = scholar_metadata %>%
+  left_join(scholar_transcripts) %>%
+  filter(Cohort < 2018,
+         `Writing-Intensive?` == 1,
+         `College Year` == "Freshman") %>%
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years")))
+```
+
+A total of 585 unique Scholars took a total of 1558 courses in writing-intensive disciplines during their Freshman year of college, broken down in Table \ref{table:freshman-writing} by discipline and cohort:
+
+```{r}
+writing_courses %>%
+  mutate(`NCES Major Category` = str_replace_all(str_to_title(`NCES Major Category`), "And", "&")) %>%
+  group_by(Cohort, `NCES Major Category`) %>%
+  summarise(n = n()) %>%
+  spread(key = Cohort, value = n) %>%
+  arrange(desc(`2012`)) %>%
+  pander(caption = "\\label{table:freshman-writing}Freshman Enrollment in Writing-Intensive Disciplines",
+         split.cells = c(Inf,10,10,10,10,10,10),
+         justify = c('left', 'center', 'center', 'center', 'center', 'center', 'center'))
+```
+
+
+```{r, eval = F}
+# Unique Scholars
+writing_courses %>%
+  select(`Scholar ID`, `# SA Cohorts`) %>%
+  unique() %>%
+  group_by(`# SA Cohorts`) %>%
+  summarise(n=n())
+
+# Attempts
+writing_courses %>%
+   group_by(`# SA Cohorts`) %>%
+   summarise(n=n())
+
+# Average GPA
+writing_courses %>%
+   filter(!(`Course Grade` %in% c("Pass/Credit", "Withdrawn"))) %>%
+   summarise(ci = list(mean_cl_normal(`Course GPA (Normalized)`) %>% 
+                        rename(`Average Course GPA`=y, lwr=ymin, upr=ymax))) %>%
+  unnest()
+
+writing_courses %>%
+   summarise(nAttempts = n(),
+             nCoursesFailed = sum(`Course GPA (Normalized)` == 0 &
+                                  `Course Grade` != "Pass/Credit", na.rm = TRUE),
+             nCoursesPassed = nAttempts - nCoursesFailed,
+             nSatisfactory = sum(Performance %in% c("B+ or above", "B or above"))) %>%
+
+  #Calculate 95% CI for Pass Rate
+    rowwise() %>%
+    mutate(tst = list(broom::tidy(prop.test(`nCoursesPassed`, `nAttempts`, conf.level=0.95)))) %>%
+    tidyr::unnest(tst) %>%
+    mutate(`Pass Rate` = percent(estimate, 0.1),
+             `95% CI` = paste("\\\n95% CI = [",
+                              percent(conf.low, 0.1), ", ",
+                              percent(conf.high, 0.1),"]\\\n",
+                              sep = "")) %>%
+    unite("Pass Rate", `Pass Rate`, `95% CI`, sep = " ") %>%
+   # Drop unneeded fields from unnest
+  select(-estimate,-statistic,-p.value,-parameter,-conf.low,-conf.high,-method,-alternative) %>%
+  
+   # Calculate 95% CI for Satisfactory Rate
+    rowwise() %>%
+    mutate(tst = list(broom::tidy(prop.test(`nSatisfactory`, `nAttempts`, conf.level=0.95)))) %>%
+    tidyr::unnest(tst) %>%
+    mutate(`Earn B+ or Higher` = percent(estimate, 0.1),
+             `95% CI` = paste("\\\n95% CI = [",
+                              percent(conf.low, 0.1), ", ",
+                              percent(conf.high, 0.1),"]\\\n",
+                              sep = "")) %>%
+    unite("Earn B+ or Higher", `Earn B+ or Higher`, `95% CI`, sep = " ") %>%
+
+  select(`Pass Rate`, `Earn B+ or Higher`)
+```
+
+These attempts earned an **average course GPA of 3.29**, with a **pass rate of 98.3%** and with **75.7% of attempts earning a B or higher**. Of these Scholars:
+
+- 268 attended one session of Summer Academy.
+- 93 attended two sessions of Summer Academy.
+- 224 did not attend Summer Academy. 
+
+Table \ref{table:writing-freshman-fall} demonstrates the **modest increase in the proportion of Scholars attempting courses in a writing-intensive discipline**  during their first semester of college when they were exposed to Writing during Summer Academy, as well as an **increase in the proportion of Scholars earning grades in each of the following three categories: B or above, B+ or above, and A- or above**.
+
+```{r}
+# Course attempts, by SA and Course Level
+scholar_metadata %>%
+  #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years"))) %>%
+  group_by(`# SA Cohorts`) %>%
+  summarise(nTotal = n()) %>%
+  left_join(
+    writing_courses %>%
+    filter(`College Year` == "Freshman",
+           `Transcript Term` == "Fall") %>%
+    #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+    group_by(`Scholar ID`, `# SA Cohorts`) %>%
+    summarise(nCoursesTaken = n(),
+              nCoursesFailed = sum(`Course GPA (Normalized)` == 0 &
+                                   !(`Course Grade` == "Pass/Credit")),
+              nWithdrawls = sum(`Course Grade` == "Withdrawn"),
+              nSatisfactory = sum(`Course GPA (Normalized)` >= 3),
+              nBplus = sum(`Course GPA (Normalized)` >= 3.3),
+              nA = sum(`Course GPA (Normalized)` >= 3.7)
+              ) %>%
+    #group_by(`SAT Group`) %>%  # Uncomment to break down by SAT Group
+    group_by(`# SA Cohorts`) %>%
+    summarise(`Unique Scholars taking Course` = n(),
+              `Attempts` = sum(nCoursesTaken),
+              `Failed` = sum(nCoursesFailed),
+              `Withdrawls` = sum(nWithdrawls),
+              `Pass` = `Attempts` - `Failed` - `Withdrawls`,
+              `Earn B or above` = percent(sum(nSatisfactory) / Attempts, na.rm = T),
+              `Earn B+ or above` = percent(sum(nBplus) / Attempts, na.rm = T),
+              `Earn A- or above` = percent(sum(nA) / Attempts, na.rm = T),
+              `Pass Rate` = percent(Pass / Attempts, na.rm = T))) %>%
+   mutate(Proportion = percent(`Unique Scholars taking Course` / nTotal, na.rm = T),
+          `Avg. # Courses per Scholar` = signif(`Attempts` / `Unique Scholars taking Course`, 2)) %>%
+  unite(`Scholars taking Course`, `Unique Scholars taking Course`, nTotal, sep = " / ") %>%
+  unite(`Scholars taking Course`, `Scholars taking Course`, Proportion, sep = " = ") %>%
+   select(`# SA Cohorts`, `Scholars taking Course`, `Pass Rate`, `Earn B or above`, `Earn B+ or above`, `Earn A- or above`) %>%
+   pander(split.cells = c(15,25,15,20,20, 20),
+          caption = "\\label{table:writing-freshman-fall}Performance of Scholars taking Writing: Freshman Fall")
+```
+
+When we account for each Scholar's score on the SAT Critical reading examination as well as the selectivity of their institution, we found **a statistically significant relationship (p < 0.01) between a Scholar's attendance at Summer Academy and their performance in Freshman Writing courses**. Specifically, we would expect to see **an average increase of 0.166** for those who attend one year of Summer Academy, and **an average increase of 0.168** those who attend two years of Summer Academy.
+
+
+```{r SA_to_writing_performance, eval = F}
+ lm_writing_by_SA = lm(`Course GPA (Normalized)` ~ `# SA Cohorts` + `SAT Critical Reading` + log(`College Forbes Ranking 2018`),
+                        data = writing_courses)
+ pander(lm_writing_by_SA,
+       caption = "Linear regression model for Writing Performance",
+       split.cells = c(20,20,20, 20, 20))
+```
+
+<!--## Overall Freshman Year Academic Performance
+In this section, we consider the relationship between participation in Summer Academy and general academic performance during the first year of college. When we account for each Scholar's SAT Percentile, we find no statistically significant relationship between the number of sessions of Summer Academy a Scholar attends and their overall performance during their Freshman year ($p>0.6$).
+
+```{r SA_to_overall_performance_freshman, eval = F}
+overall_performance_freshman = scholar_transcripts %>%
+   left_join(scholar_metadata) %>%
+   filter(Cohort < 2018,
+          `College Year` == "Freshman") %>%
+  filter(!(`Course Grade` %in% c("Pass/Credit", "Withdrawn"))) %>% #DECIDE ABOUT THESE
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years"))) %>%
+  group_by(`Scholar ID`, `# SA Cohorts`, `SAT Percentile`) %>%
+  summarise(`Freshman Year GPA` = mean(`Course GPA (Normalized)`, na.rm = T)) %>%
+  ungroup() %>%
+  select(`Freshman Year GPA`, `# SA Cohorts`, `SAT Percentile` )
+
+lm_freshman_by_SA = lm(`Freshman Year GPA` ~ `# SA Cohorts` + `SAT Percentile`, data = overall_performance_freshman)
+pander(lm_freshman_by_SA,
+       caption = "Linear Regression of Overall Freshman Year Performance",
+       split.cells = c(20,20,20, 20, 20))
+```
+-->
+
+
+<!-- ## Influence on Letter Grades -->
+
+<!-- There does not appear to be a relationship between participation in Summer Academy and the distribution of letter grades across all courses (Table \ref{table:letter-freq}): -->
+
+<!-- ```{r} -->
+<!-- scholar_transcripts %>% -->
+<!--   left_join(scholar_metadata) %>% -->
+<!--   filter(!is.na(`Course Grade`)) %>% -->
+<!--   mutate(`Course Grade` = ifelse(str_length(`Course Grade`) < 3, substr(`Course Grade`, 0, 1), `Course Grade`), -->
+<!--          `Course Grade` = factor(`Course Grade`, levels = c("A", "B", "C", "D", "F",  -->
+<!--                                                             "Pass/Credit", "Fail/No Credit", "Withdrawn", "Incomplete"))) %>% -->
+<!--   group_by(`# SA Cohorts`, `Course Grade`) %>% -->
+<!--   summarise(n = n()) %>% -->
+<!--   mutate(freq = paste("(", percent(n / sum(n)), ")", sep = "")) %>% -->
+<!--   unite("Frequency", n, freq, sep = " ") %>% -->
+<!--   spread(`# SA Cohorts`, Frequency) %>% -->
+<!--   rename("No SA" = `0`,  -->
+<!--          "1 Year" = `1`,  -->
+<!--          "2 Years" = `2`) %>% -->
+<!--   pander(split.cell = c(10, 10, 10, 10), -->
+<!--          caption = "\\label{table:letter-freq}Relative Frequency of Letter Grades, All Courses") -->
+<!-- ``` -->
+
+## Impact of Summer Academy on STEM Disciplines
+
+### Performance in STEM Courses
+
+```{r}
+STEM_courses = scholar_transcripts %>%
+  left_join(scholar_metadata) %>%
+  filter(`STEM Course?` == 1) %>%
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years")))
+```
+
+```{r, eval = F}
+# Unique Scholars
+STEM_courses %>%
+  select(`Scholar ID`, `# SA Cohorts`) %>%
+  unique() %>%
+  group_by(`# SA Cohorts`) %>%
+  summarise(n=n())
+
+# Attempts
+STEM_courses %>%
+   group_by(`# SA Cohorts`) %>%
+   summarise(n=n())
+
+# Average GPA
+STEM_courses %>%
+   filter(!(`Course Grade` %in% c("Pass/Credit", "Withdrawn"))) %>%
+   summarise(ci = list(mean_cl_normal(`Course GPA (Normalized)`) %>% 
+                        rename(`Average Course GPA`=y, lwr=ymin, upr=ymax))) %>%
+  unnest()
+
+# Pass / Satisfactory Rates
+STEM_courses %>%
+   summarise(nAttempts = n(),
+             nCoursesFailed = sum(`Course GPA (Normalized)` == 0 &
+                                    !(`Course Grade` == "Pass/Credit")),
+             `Pass Rate` = percent((nAttempts - nCoursesFailed)/nAttempts),
+             `Earn B or above` = percent(sum(Performance %in% c("B+ or above", "B or above")/nAttempts)),
+             `Earn B+ or above` = percent(sum(Performance == "B+ or above")/nAttempts),
+             `Earn A- or above` = percent(sum(`Course GPA (Normalized)` >= 3.7)/nAttempts)) %>%
+
+   select(`Pass Rate`, `Earn B or above`, `Earn B+ or above`, `Earn A- or above`) %>%
+  pander(split.cells = c(15,25,25,25))
+```
+
+The dataset includes records of 8,320 STEM courses taken by 630 unique Scholars. Scholars earned an **average course GPA of 2.81**, with a **pass rate of 94.4%**, with **51.4% of Scholars earning a B or higher** and **35.1% earning a B+ or higher**. Of these Scholars:
+
+- 126 attended two sessions of Summer Academy.
+- 344 attended one session of Summer Academy.
+- 260 did not attend Summer Academy. 
+
+Controlling for differences in academic preparedness (using SAT Math score as a proxy) and institutional rigor, we observe a **statistically significant relationship ($p < 0.05$) between Scholars' performance in STEM courses and their participation in Summer Academy**. Specifically, the coefficient suggests that we would expect to see **an average increase of 0.042** in their GPA in STEM courses for those who attend one session of Summer Academy, and **an average increase of 0.082** for those who attend Summer Academy for a second session.
+
+```{r, eval = F}
+STEM_courses_no_Pass = STEM_courses %>%
+    filter(!(`Course Grade` %in% c("Pass/Credit", "Withdrawn")),
+         `SAT Math` > 300) # Outlier
+
+lm_STEM_grades = lm(`Course GPA (Normalized)` ~ `# SA Cohorts` + `SAT Math` + log10(`College Forbes Ranking 2018`), data = STEM_courses_no_Pass)
+
+pander(lm_STEM_grades,
+       caption = "Linear Regression of STEM Performance",
+       split.cells = c(20,20,20, 20, 20))
+```
+
+
+```{r, eval=F}
+STEM_courses %>%
+  #group_by(`SAT Group`) %>%
+  group_by(`# SA Cohorts`) %>%
+  filter(!(`Course Grade` %in% c("Pass/Credit", "Withdrawn"))) %>% # These artificially lower average GPA calculation
+  #filter(!is.na(`SAT Group`)) %>%
+  summarise(`Average Course GPA` = signif(mean(`Course GPA (Normalized)`, na.rm = T), 3),
+            sd = sd(`Course GPA (Normalized)`, na.rm = TRUE),
+            n = n()) %>%
+  select(`# SA Cohorts`, `Average Course GPA`) %>%
+  spread(`# SA Cohorts`, `Average Course GPA` ) %>%
+  pander(caption = "Average GPA in STEM Courses",
+         split.cells = c(20,20,20,20,20))
+```
+
+We found that Scholars who attended Summer Academy were **slightly more likely to enroll in a STEM course** than those who did not (Table \ref{table:STEM-performance-SA}), though performance is fairly consistent across all Scholars:
+
+```{r}
+# Course attempts, by SA and # SA Cohorts
+scholar_metadata %>%
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years"))) %>%
+  group_by(`# SA Cohorts`) %>%
+  summarise(nTotal = n()) %>%
+  left_join(
+    STEM_courses %>%
+    #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+    group_by(`Scholar ID`, `# SA Cohorts`) %>%
+    summarise(nCoursesTaken = n(),
+              nCoursesFailed = sum(`Course GPA (Normalized)` == 0 &
+                                   !(`Course Grade` == "Pass/Credit")),
+              nWithdrawls = sum(`Course Grade` == "Withdrawn"),
+              nBorHigher = sum(Performance %in% c("B+ or above", "B or above")),
+              nBplusOrHigher = sum(Performance == "B+ or above"),
+              nA = sum(`Course GPA (Normalized)` >= 3.7)) %>%
+    #group_by(`SAT Group`) %>%  # Uncomment to break down by SAT Group
+    mutate(`Attend SA?` = ifelse(`# SA Cohorts` != 0, "Attended SA", "Did not attend")) %>%
+    group_by(`# SA Cohorts`) %>%
+    summarise(`Unique Scholars taking STEM Course` = n(),
+              `Attempts` = sum(nCoursesTaken),
+              `Failed` = sum(nCoursesFailed),
+              `Withdrawls` = sum(nWithdrawls),
+              `Pass Rate` = percent((`Attempts` - `Failed` - `Withdrawls`) / `Attempts`),
+              `Earn B or above` = percent(sum(nBorHigher)/Attempts),
+              `Earn B+ or above` = percent(sum(nBplusOrHigher)/Attempts),
+              `Earn A- or above` = percent(sum(nA)/Attempts))) %>%
+   mutate(Proportion = percent(`Unique Scholars taking STEM Course` / nTotal),
+          `Avg. # Courses per Scholar` = round(`Attempts` / `Unique Scholars taking STEM Course`, 1)) %>%
+   unite(`Scholars taking STEM Course`, `Unique Scholars taking STEM Course`, nTotal, sep = " / ") %>%
+   unite(`Scholars taking STEM Course`, `Scholars taking STEM Course`, Proportion, sep = " = ") %>%
+   select(`# SA Cohorts`, `Scholars taking STEM Course`, `Pass Rate`, `Earn B or above`, `Earn B+ or above`, `Earn A- or above`) %>%
+   pander(split.cells = c(15,25,15,20,20, 20),
+          caption = "\\label{table:STEM-performance-SA}Performance of Scholars taking STEM Courses")
+```
+
+### Incidence of STEM Majors and STEM Persistence
+
+Scholars who attended Summer Academy were no more likely to intend to major in STEM than those who did not attend (Table \ref{table:intended-STEM-SA}):
+
+```{r}
+scholar_metadata %>%
+  filter(`Scholar Status`== "Scholar Alumni") %>%
+  mutate(`Intended Major STEM?` = factor(`Intended Major STEM?`, 
+                                         labels = c("Intended non-STEM or Undeclared", 
+                                                    "Intended STEM Major")),
+         `# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No Summer Academy", "1 Session", "2 Sessions"))) %>%
+  group_by(`# SA Cohorts`, `Intended Major STEM?`) %>%
+  summarise(nMajors = n()) %>%
+  transmute(`Intended Major STEM?`, prop = percent(nMajors/sum(nMajors))) %>%
+  ungroup() %>%
+  spread(`Intended Major STEM?`, prop) %>%
+  pander(split.cells = c(20, 20, 20),
+         caption = "\\label{table:intended-STEM-SA}Prevalence of Intended STEM Major")
+```
+
+Nor were they more likely to ultimately major in STEM (Table \ref{table:current-STEM-SA}):
+
+```{r}
+scholar_metadata %>%
+  filter(`Scholar Status`== "Scholar Alumni") %>%
+  mutate(`Current Major STEM?` = factor(`Current Major STEM?`, 
+                                        levels = c("#N/A", 0, 1),
+                                         labels = c("Current non-STEM or Undeclared",
+                                                    "Current non-STEM or Undeclared", 
+                                                    "Current STEM Major")),
+         `# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No Summer Academy", "1 Session", "2 Sessions"))) %>%
+  group_by(`# SA Cohorts`, `Current Major STEM?`) %>%
+  summarise(nMajors = n()) %>%
+  transmute(`Current Major STEM?`, prop = percent(nMajors/sum(nMajors))) %>%
+  ungroup() %>%
+  spread(`Current Major STEM?`, prop) %>%
+  pander(split.cells = c(20, 20, 20),
+         caption = "\\label{table:current-STEM-SA}Prevalence of STEM Major")
+```
+
+Table \ref{table:STEM-persistence} considers **only those Scholars who have completed their degree**. There is no evidence of a relationship between the number of SA Cohorts a Scholar attends and the rate at which they persist in STEM (when controlling for SAT Math scores and College Forbes Ranking).
+
+```{r STEMpersistence_by_nSA}
+scholar_metadata %>%
+  filter(`Scholar Status`== "Scholar Alumni", 
+         `STEM Persistence` %in% c("Persisted in STEM", "Dropped STEM")) %>%
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No Summer Academy", "1 Session", "2 Sessions"))) %>%
+  group_by(`# SA Cohorts`, `STEM Persistence`) %>%
+  summarise(n = n()) %>%
+  spread(key = `STEM Persistence`, value = n) %>%
+  mutate(`# Persisted in STEM` = paste(`Persisted in STEM`, "/", `Persisted in STEM` + `Dropped STEM`),
+         `% Persisted in STEM` = percent(`Persisted in STEM` / (`Persisted in STEM` + `Dropped STEM`))) %>%
+  
+  select(-`Dropped STEM`, -`Persisted in STEM`) %>%
+  pander(caption = "\\label{table:STEM-persistence}STEM Persistence",
+         split.cells = c(10,10,30))
+```
+
+```{r eval = F}
+intendedSTEMalums = scholar_metadata %>%
+  filter(`Scholar Status`== "Scholar Alumni", 
+         `STEM Persistence` %in% c("Persisted in STEM", "Dropped STEM"))
+
+summary(glm(`STEM Persistence` ~ `# SA Cohorts` + `SAT Math` + `College Forbes Ranking 2018`, data = intendedSTEMalums, family = "binomial"))
+```
+
+## Impact on Women in STEM
+
+_Note: due to limitations in data collection, the following analysis considers only binary \texttt{Male} / \texttt{Female} sex designations._
+
+Attendance at Summer Academy had opposing effects on intention to major in STEM for male and female Scholars. Male Scholars were **more** likely to intend to major in STEM the more sessions of Summer Academy they attended, while female Scholars were **less** likely to have an intended STEM major (Table \ref{table:intended-STEM-gender}):
+
+```{r}
+scholar_metadata %>%
+  filter(`Scholar Status`== "Scholar Alumni") %>%
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No Summer Academy", "1 Session", "2 Sessions"))) %>%
+  group_by(`Gender`, `# SA Cohorts`, `Intended Major STEM?`) %>%
+  summarise(nMajors = n()) %>%
+  transmute(`Intended Major STEM?`, prop = percent(nMajors/sum(nMajors))) %>%
+  spread(`Intended Major STEM?`, prop) %>%
+  rename("% Scholars with Intended non-STEM Major" = `0`, "% Scholars Intended STEM Major" = `1`) %>%
+  pander(split.cells = c(20, 25, 25),
+         caption = "\\label{table:intended-STEM-gender}Prevalence of Intended STEM Major, by Sex")
+```
+
+We observe the same pattern in major upon graduation (Table \ref{table:grad-STEM-gender}):
+
+```{r}
+scholar_metadata %>%
+  filter(`Scholar Status`== "Scholar Alumni",
+         `Current Major STEM?` != "<N/A>") %>%
+  mutate(`Current Major STEM?` = factor(`Current Major STEM?`, 
+                                        levels = c("#N/A", 0, 1),
+                                         labels = c("Graduated non-STEM Major",
+                                                    "Graduated non-STEM Major", 
+                                                    "Graduated STEM Major"))) %>%
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No Summer Academy", "1 Session", "2 Sessions"))) %>%
+  group_by(`Gender`, `# SA Cohorts`, `Current Major STEM?`) %>%
+  summarise(nMajors = n()) %>%
+  transmute(`Current Major STEM?`, prop = percent(nMajors/sum(nMajors))) %>%
+  spread(`Current Major STEM?`, prop) %>%
+  pander(split.cells = c(20, 25, 25, 25),
+         caption = "\\label{table:grad-STEM-gender}Prevalence of STEM Major upon Graduation, by Sex")
+```
+
+
+Table \ref{table:STEM-persistence-sex} considers **only those Scholars who have completed their degree and who intended to major in STEM**. For Scholars who intended to major in STEM, the **rate of persistence** for female Scholars who had attended two sessions of Summer Academy was comparable to that of their male counterparts.
+
+\newpage
+
+```{r womenSTEMpersistence_by_nSA}
+scholar_metadata %>%
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No Summer Academy", "1 Session", "2 Sessions"))) %>%
+  filter(`Scholar Status`== "Scholar Alumni", 
+         `STEM Persistence` %in% c("Persisted in STEM", "Dropped STEM")) %>%
+  group_by(`# SA Cohorts`,  `Gender`, `STEM Persistence`) %>%
+  summarise(n = n()) %>%
+  spread(key = `STEM Persistence`, value = n) %>%
+  mutate(`Dropped STEM` = replace_na(`Dropped STEM`, 0),
+         `% Persisted in STEM` = percent(`Persisted in STEM` / (`Persisted in STEM` + `Dropped STEM`)))%>%
+  pander(caption = "\\label{table:STEM-persistence-sex}STEM Persistence, by # SA and Sex",
+         split.cells = c(10, 10, 20, 20,20))
+```
+
+This pattern merits further investigation: it is possible that the reason for this leveled persistence is that female Scholars are disproportionately deterred from intending to major in STEM, and so those that remain are predisposed to be more perseverant.
+
+## Impact of the Chemistry Elective
+
+From 2014-2018, an optional Chemistry elective was offered during Summer Academy. On average, roughly 17.5% of Scholars in each cohort who attended Summer Academy opted into this elective (a total of 74 Scholars over five years, Table \ref{table:took-SA-chem}).
+```{r}
+scholar_metadata %>%
+  mutate(`SA Status` = ifelse(`SA Chemistry`, "Took SA Chemistry", 
+                              ifelse(`# SA Cohorts` > 0, "SA w/o Chemistry", "No SA")),
+         `SA Status` = factor(`SA Status`, levels = c("No SA", "Took SA Chemistry", "SA w/o Chemistry"))) %>%
+  group_by(Cohort, `SA Status`) %>%
+  filter(`SA Status` != "No SA",
+         Cohort > 2013,
+         Cohort < 2019) %>%
+  summarise(n = n()) %>%
+  transmute(`SA Status`, prop = percent(n/sum(n))) %>%
+  spread(`Cohort`, prop) %>%
+  pander(split.cells = c(20, 15, 15, 15, 15, 15),
+         caption = "\\label{table:took-SA-chem}Proportion of SA-attending Scholars in Chemistry Elective")
+  
+```
+
+```{r}
+chem_courses = scholar_metadata %>%
+  left_join(scholar_transcripts) %>%
+  filter(grepl("Chem", `Course Name`),
+         `College Year` == "Freshman") %>%
+  mutate(`SA Status` = ifelse(`SA Chemistry`, "Took SA Chemistry", 
+                              ifelse(`# SA Cohorts` > 0, "SA w/o Chemistry", "No SA")),
+         `SA Status` = factor(`SA Status`, levels = c("No SA", "SA w/o Chemistry", "Took SA Chemistry")))
+```
+
+
+```{r, eval = F}
+# Unique Scholars
+chem_courses %>%
+  select(`Scholar ID`, `SA Status`) %>%
+  unique() %>%
+  summarise(n=n())
+
+# Attempts
+chem_courses %>%
+   group_by(`SA Status`) %>%
+   summarise(n=n())
+
+# Average GPA
+chem_courses %>%
+   filter(!(`Course Grade` %in% c("Pass/Credit", "Withdrawn"))) %>%
+   summarise(ci = list(mean_cl_normal(`Course GPA (Normalized)`) %>% 
+                        rename(`Average Course GPA`=y, lwr=ymin, upr=ymax))) %>%
+  unnest()
+
+
+chem_courses %>%
+   summarise(nAttempts = n(),
+             nCoursesFailed = sum(`Course GPA (Normalized)` == 0 &
+                                    !(`Course Grade` == "Pass/Credit")),
+             `Pass Rate` = percent((nAttempts - nCoursesFailed)/nAttempts),
+             `Earn B or above` = percent(sum(Performance %in% c("B+ or above", "B or above")) / nAttempts),
+             `Earn B+ or above` = percent(sum(Performance == "B+ or above")/nAttempts),
+             `Earn A- or above` = percent(sum(`Course GPA (Normalized)` == 4.0)/nAttempts)) %>%
+
+
+   select(`Pass Rate`, `Earn B or above`, `Earn B+ or above`, `Earn A- or above`) %>%
+  pander(split.cells = c(15,25,25))
+```
+
+
+A total of 247 unique Scholars took a total of 518 Chemistry courses during their Freshman year, earning an average course GPA of 2.74, with a pass rate of 94.2% and with 44.8% of Scholars earning a B or higher. Of these Scholars, 51 had taken the Chemistry elective during Summer Academy, 139 attended Summer Academy but did not take the Chemistry elective, and 97 did not attend Summer Academy. Controlling for differences in academic preparedness (using SAT Math score as a proxy), there appears to be **no significant relationship between Scholars' performance in those courses and whether or not they were exposed to Chemistry during Summer Academy** (Figure 5).
+
+
+```{r, fig.height = 2.3, fig.width = 7, fig.align = "left"}
+chem_courses %>%
+  filter(!(`Course Grade` %in% c("Pass/Credit", "Withdrawn")),
+         !is.na(`SAT Group`)) %>%
+  ggplot(aes(x = `SA Status`, y = `Course GPA (Normalized)`)) +
+  geom_jitter(pch = 21, size = .5, width = 0.1, alpha = 0.3)  +   # Add original datapoints (jittered)
+  geom_boxplot(outlier.shape = NA, alpha = 0.7, fill = brewer.pal(n = 3, name = "Greens")) +                   # Hide outliers so they don't double-plot
+  ylab("Course GPA\n (Normalized to 4-point scale)") +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.title = element_blank(),
+        legend.text=element_text(size=6),
+        axis.text.x = element_text(vjust = 0.5, hjust=0.5),
+        axis.title.x = element_text(color = "grey20", size = 10, angle = 0, hjust = .5, vjust = 0, face = "plain", family="Times")) +
+  xlab("Fig. 5: Average GPA in Freshman Chemistry Courses")
+```
+
+
+```{r, eval = FALSE}
+chem_courses %>%
+  group_by(`SAT Percentile`, `SA Status`) %>%
+  filter(!(`Course Grade` %in% c("Pass/Credit", "Withdrawn")), # These artificially lower average GPA calculation
+         !is.na(`SAT Percentile`)) %>%
+  summarise(`Average Course GPA` = mean(`Course GPA (Normalized)`),
+            sd = sd(`Course GPA (Normalized)`, na.rm = TRUE),
+            n = n()) %>%
+  mutate(se = sd / sqrt(n),
+         lower.ci = `Average Course GPA` - qt(1 - (0.05 / 2), n - 1) * se,
+         upper.ci = `Average Course GPA` + qt(1 - (0.05 / 2), n - 1) * se,
+         `95% CI` = paste("\\\n95% CI = [", signif(lower.ci, 3), ", ", signif(upper.ci, 3),"]\\\n", sep = ""),
+         `Average Course GPA` = signif(`Average Course GPA`, 3)) %>%
+  select(`SA Status`, `Average Course GPA`, `95% CI`) %>%
+  unite("Average GPA", `Average Course GPA`, `95% CI`, sep = " ") %>%
+  spread(`SA Status`, `Average GPA` ) %>%
+  pander(caption = "Average GPA in Freshman Chemistry Courses",
+         split.cells = c(20,20,20,20,20))
+```
+
+<!--This observation is validated by the following linear regression, which also controls for SAT Math scores and institutional selectivity:-->
+```{r, eval = F}
+lm_chem_grades = lm(`Course GPA (Normalized)` ~ `SA Status` + `SAT Math` + log10(`College Forbes Ranking 2018`), data = chem_courses)
+
+pander(lm_chem_grades,
+       caption = "Linear Regression of Freshman Chemistry Performance",
+       split.cells = c(20,20,20, 20, 20))
+```
+
+However, Scholars who opted into the Chemistry elective during Summer Academy were **2.7 times as likely to take Chemistry during their Freshman year** than either those who did not attend Summer Academy or those who attended Summer Academy, but opted out of the Chemistry Elective (Table \ref{table-freshman-chem}). 
+
+```{r}
+# Course attempts, by SA and SA Chemistry status
+scholar_metadata %>%
+  mutate(`SA Status` = ifelse(`SA Chemistry`, "Took SA Chemistry", 
+                              ifelse(`# SA Cohorts` > 0, "SA w/o Chemistry", "No SA")),
+         `SA Status` = factor(`SA Status`, levels = c("No SA", "SA w/o Chemistry", "Took SA Chemistry"))) %>%
+  #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+  group_by(`SA Status`) %>%
+  summarise(nTotal = n()) %>%
+  left_join(
+    chem_courses %>%
+    #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+    group_by(`Scholar ID`, `SA Status`) %>%
+    summarise(nCoursesTaken = n(),
+              nCoursesFailed = sum(`Course GPA (Normalized)` == 0 &
+                                   !(`Course Grade` == "Pass/Credit")),
+              nWithdrawls = sum(`Course Grade` == "Withdrawn"),
+              nBorHigher = sum(Performance %in% c("B+ or above", "B or above")),
+              nBplusOrHigher = sum(Performance  == "B+ or above"),
+              nA = sum(`Course GPA (Normalized)` >= 3.7)) %>%
+    #group_by(`SAT Group`) %>%  # Uncomment to break down by SAT Group
+    group_by(`SA Status`) %>%
+    summarise(`Unique Scholars taking Chem` = n(),
+              `Attempts` = sum(nCoursesTaken),
+              `Failed` = sum(nCoursesFailed),
+              `Withdrawls` = sum(nWithdrawls),
+              `Pass Rate` = percent((`Attempts` - `Failed` - `Withdrawls`)/ Attempts),
+              `Earn B or above` = percent(sum(nBorHigher) / Attempts),
+              `Earn B+ or above` = percent(sum(nBplusOrHigher) / Attempts),
+              `Earn A- or above` = percent(sum(nA) / Attempts))) %>%
+   mutate(Proportion = percent(`Unique Scholars taking Chem` / nTotal),
+          `Avg. # Courses per Scholar` = signif(`Attempts` / `Unique Scholars taking Chem`, 2)) %>%
+  unite(`Scholars taking Chemistry Freshman Year`, `Unique Scholars taking Chem`, nTotal, sep = " / ") %>%
+  unite(`Scholars taking Chemistry Freshman Year`, `Scholars taking Chemistry Freshman Year`, Proportion, sep = " = ") %>%
+   select(`SA Status`, `Scholars taking Chemistry Freshman Year`, `Avg. # Courses per Scholar`, `Pass Rate`, `Earn B or above`, `Earn B+ or above`, `Earn A- or above`) %>%
+   pander(split.cells = c(15,20,10,10,10,10),
+          caption = "\\label{table-freshman-chem}Performance of Scholars taking Freshman Chemistry")
+``` 
+
+_Note: the latter comparison is likely subject to some selection bias: Scholars attending Summer Academy who were planning to take a Chemistry course in college may have been more likely to opt into the Chemistry elective. We not to have sufficient data to support or refute this hypothesis._
+
+Scholars who took the Chemistry elective during Summer Academy were **twice as likely to have an Intended Major in Chemistry** as Scholars who did not attend Summer Academy, and **8.5 times as likely** as those who attend Summer Academy but did not take the Chemistry elective (Table \ref{table:intended-chem-majors}). _Note: as before, this latter comparison is likely subject to selection bias._
+```{r}
+scholar_metadata %>%
+  mutate(`SA Status` = ifelse(`SA Chemistry`, "Took SA Chemistry", 
+                              ifelse(`# SA Cohorts` > 0, "SA w/o Chemistry", "No SA")),
+         `SA Status` = factor(`SA Status`, levels = c("No SA", "SA w/o Chemistry", "Took SA Chemistry")),
+         `Intended Major` = ifelse(grepl("Chem", `Intended Major`), "Intend to Major in Chemistry", "Other Major")) %>%
+  #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+
+  group_by(`SA Status`, `Intended Major`) %>%
+  summarise(nMajors = n()) %>%
+  transmute(`Intended Major`, prop = percent(nMajors/sum(nMajors))) %>%
+  spread(`Intended Major`, prop) %>%
+  pander(split.cells = c(20, 20, 20),
+         caption = "\\label{table:intended-chem-majors}Prevalence of Intended Chemistry Major, by SA Status")
+```
+
+Scholars who took the Chemistry elective during Summer Academy are **4.3 times as likely to have a Current Major in Chemistry** as Scholars who did not attend Summer Academy, and **7.3 times as likely** as those who attended Summer Academy but did not take the Chemistry elective (Table \ref{table:chem-majors}). _Note: as before, this latter comparison is likely subject to selection bias._
+```{r}
+scholar_metadata %>%
+  mutate(`SA Status` = ifelse(`SA Chemistry`, "Took SA Chemistry", 
+                              ifelse(`# SA Cohorts` > 0, "SA w/o Chemistry", "No SA")),
+         `SA Status` = factor(`SA Status`, levels = c("No SA", "SA w/o Chemistry", "Took SA Chemistry")),
+         `Current Major` = ifelse(grepl("Chem", `Current Major`), "Current Major in Chemistry", "Other Major")) %>%
+  group_by(`SA Status`, `Current Major`) %>%
+  summarise(nMajors = n()) %>%
+  transmute(`Current Major`, prop = percent(nMajors/sum(nMajors))) %>%
+  spread(`Current Major`, prop) %>%
+  pander(split.cells = c(10, 20, 20, 20),
+         caption = "\\label{table:chem-majors}Prevalence of Current Chemistry Major, by SA Status")
+```
+
+## Impact of the Computer Science Elective
+
+Beginning in 2016, an optional Computer Science Elective was offered during Summer Academy. On average, roughly 18.1% of Scholars in each cohort (a total of 49 Scholars over two years, Table \ref{table:CS-elective}) opted into this elective. In 2019, all second session Scholars were required to take Computer Science.
+
+```{r}
+cs_courses = scholar_metadata %>%
+  left_join(scholar_transcripts) %>%
+  filter(grepl("Computer", `Course Name`) | grepl("Computer", `NCES Course`), # Between these two, we catch most of them
+         `College Year` == "Freshman") %>%
+  left_join((read_csv("SCS_freshman_CS_courses.csv") %>% # Import Jordan's labeling of CS courses to filter out randos
+              select("Course 18 ID", "CS Course Level")), 
+            by = "Course 18 ID") %>%
+  filter(!is.na(`CS Course Level`)) %>%
+  mutate(`CS Course Level` = factor(`CS Course Level`, levels = c("CS for non-Majors", "CS1", "CS2", "CS Math", "CS Elective")),
+         `SA Status` = ifelse(`SA Computer Science`, "Took SA CS", 
+                              ifelse(`# SA Cohorts` > 0, "SA w/o CS", "No SA")),
+         `SA Status` = factor(`SA Status`, levels = c("No SA", "SA w/o CS", "Took SA CS")))
+
+scholar_metadata %>%
+  mutate(`SA Status` = ifelse(`SA Computer Science`, "Took SA CS", 
+                              ifelse(`# SA Cohorts` > 0, "SA w/o CS", "No SA")),
+         `SA Status` = factor(`SA Status`, levels = c("No SA", "SA w/o CS", "Took SA CS"))) %>%
+  group_by(Cohort, `SA Status`) %>%
+  filter(`SA Status` != "No SA",
+         Cohort > 2015,
+         Cohort <= 2019) %>%
+  summarise(n = n()) %>%
+  transmute(`SA Status`, prop = percent(n/sum(n))) %>%
+  spread(`Cohort`, prop) %>%
+  pander(split.cells = c(20, 15, 15, 15, 15),
+         caption = "\\label{table:CS-elective}Proportion of SA-attending Scholars in CS Elective")
+```
+
+```{r, eval = F}
+# Unique Scholars
+cs_courses %>%
+  select(`Scholar ID`, `SA Status`) %>%
+  unique() %>%
+  group_by(`SA Status`) %>%
+  summarise(n=n())
+
+# Attempts
+cs_courses %>%
+   group_by(`SA Status`) %>%
+   summarise(n=n())
+
+# Average GPA
+cs_courses %>%
+   filter(!(`Course Grade` %in% c("Pass/Credit", "Withdrawn"))) %>%
+   summarise(ci = list(mean_cl_normal(`Course GPA (Normalized)`) %>% 
+                        rename(`Average Course GPA`=y, lwr=ymin, upr=ymax))) %>%
+  unnest()
+
+
+cs_courses %>%
+   summarise(nAttempts = n(),
+             nCoursesFailed = sum(`Course GPA (Normalized)` == 0 &
+                                    !(`Course Grade` == "Pass/Credit")),
+             nCoursesPassed = nAttempts - nCoursesFailed,
+             nSatisfactory = sum(Performance %in% c("B+ or above", "B or above"))) %>%
+
+  # Calculate 95% CI for Pass Rate
+    rowwise() %>%
+    mutate(tst = list(broom::tidy(prop.test(`nCoursesPassed`, `nAttempts`, conf.level=0.95)))) %>%
+    tidyr::unnest(tst) %>%
+    mutate(`Pass Rate` = percent(estimate, 0.1),
+             `95% CI` = paste("\\\n95% CI = [",
+                              percent(conf.low, 0.1), ", ",
+                              percent(conf.high, 0.1),"]\\\n",
+                              sep = "")) %>%
+    #unite("Pass Rate", `Pass Rate`, `95% CI`, sep = " ") %>%
+   # Drop unneeded fields from unnest
+  select(-estimate,-statistic,-p.value,-parameter,-conf.low,-conf.high,-method,-alternative) %>%
+  
+   # Calculate 95% CI for Satisfactory Rate
+    rowwise() %>%
+    mutate(tst = list(broom::tidy(prop.test(`nSatisfactory`, `nAttempts`, conf.level=0.95)))) %>%
+    tidyr::unnest(tst) %>%
+    mutate(`Earn B or Higher` = percent(estimate, 0.1),
+             `95% CI` = paste("\\\n95% CI = [",
+                              percent(conf.low, 0.1), ", ",
+                              percent(conf.high, 0.1),"]\\\n",
+                              sep = "")) %>%
+    #unite("Earn B+ or Higher", `Earn B+ or Higher`, `95% CI`, sep = " ") %>%
+
+   select(`Pass Rate`, `Earn B or Higher`) %>%
+  pander(split.cells = c(15,25,25))
+```
+
+
+A total of 138 unique Scholars from the 2016-2019 cohorts took a Computer Science course during their Freshman year, earning an average course GPA of 2.89, with a pass rate of 92.2% and with 51.1% of Scholars earning a B or higher. Of these Scholars, 23 took the Computer Science elective during Summer Academy, 78 attended Summer Academy but did not take the Computer Science elective, and 37 did not attend Summer Academy. Controlling for differences in academic preparedness (using SAT Group as a proxy), there appears to be **no significant relationship between Scholars' performance in those courses and whether or not they were exposed to Computer Science during Summer Academy** (Figure 6).
+
+```{r, fig.height = 2.3, fig.width = 7, fig.align = "left"}
+library("RColorBrewer")
+cs_courses %>%
+  filter(!(`Course Grade` %in% c("Pass/Credit", "Withdrawn")),
+         !is.na(`SAT Group`)) %>%
+  ggplot(aes(x = `SA Status`, y = `Course GPA (Normalized)`)) +
+  geom_jitter(pch = 21, size = .5, width = 0.1, alpha = 0.3)  +   # Add original datapoints (jittered)
+  geom_boxplot(outlier.shape = NA, alpha = 0.7, fill = brewer.pal(n = 3, name = "Blues")) +                   # Hide outliers so they don't double-plot
+  ylab("Course GPA\n (Normalized to 4-point scale)") +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.title = element_blank(),
+        legend.text=element_text(size=6),
+        axis.text.x = element_text(vjust = 0.5, hjust=0.5),
+        axis.title.x = element_text(color = "grey20", size = 10, angle = 0, hjust = .5, vjust = 0, face = "plain", family="Times")) +
+  xlab("Fig. 6: Average GPA in Freshman Computer Science Courses")
+```
+
+```{r, eval = F}
+cs_courses %>%
+  mutate(`SA Status` = ifelse(`SA Chemistry`, "Took SA Computer Science", 
+                              ifelse(`# SA Cohorts` > 0, "Attended SA, no CS", "Did Not Attend SA"))) %>%
+  group_by(`SA Status`) %>%
+  filter(!(`Course Grade` %in% c("Pass/Credit", "Withdrawn"))) %>% # These artificially lower average GPA calculation
+  summarise(`Average Course GPA` = mean(`Course GPA (Normalized)`),
+            sd = sd(`Course GPA (Normalized)`, na.rm = TRUE),
+            n = n()) %>%
+  mutate(se = sd / sqrt(n),
+         lower.ci = `Average Course GPA` - qt(1 - (0.05 / 2), n - 1) * se,
+         upper.ci = `Average Course GPA` + qt(1 - (0.05 / 2), n - 1) * se,
+         `95% CI` = paste("\\\n95% CI = [", signif(lower.ci, 3), ", ", signif(upper.ci, 3),"]\\\n", sep = ""),
+         `Average Course GPA` = sprintf("%.2f", signif(`Average Course GPA`, 3))) %>%
+  select(`SA Status`, `Average Course GPA`, `95% CI`) %>%
+  unite("Average GPA", `Average Course GPA`, `95% CI`, sep = " ") %>%
+  spread(`SA Status`, `Average GPA` ) %>%
+  pander(caption = "Average Course GPA in Freshman Computer Science, by Summer Academy Status",
+         split.cells = c(20,20,20,20,20))
+```
+
+As with Chemistry, Scholars who opted into the Computer Science elective during Summer Academy were nearly **3 times as likely to take a Computer Science course during their Freshman year** than those who attended Summer Academy, but opted out of the CS Elective, and **4.7 times as likely** as those who did not attend Summer Academy at all (Table \ref{table:cs-freshman-year}).
+
+
+```{r}
+# Course attempts, by SA and SA CS status
+scholar_metadata %>%
+  mutate(`SA Status` = ifelse(`SA Computer Science`, "Took SA CS", 
+                              ifelse(`# SA Cohorts` > 0, "SA w/o CS", "No SA")),
+         `SA Status` = factor(`SA Status`, levels = c("No SA", "SA w/o CS", "Took SA CS"))) %>%
+  #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+  group_by(`SA Status`) %>%
+  summarise(nTotal = n()) %>%
+  left_join(
+    cs_courses %>%
+    #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+    group_by(`Scholar ID`, `SA Status`) %>%
+    summarise(nCoursesTaken = n(),
+              nCoursesFailed = sum(`Course GPA (Normalized)` == 0 &
+                                   !(`Course Grade` == "Pass/Credit")),
+              nWithdrawls = sum(`Course Grade` == "Withdrawn"),
+              nBorHigher = sum(Performance %in% c("B+ or above", "B or above")),
+              nBplusOrHigher = sum(Performance == "B+ or above"),
+              nA = sum(`Course GPA (Normalized)` >= 3.7)) %>%
+    #group_by(`SAT Group`) %>%  # Uncomment to break down by SAT Group
+    group_by(`SA Status`) %>%
+    summarise(`Unique Scholars taking CS` = n(),
+              `Attempts` = sum(nCoursesTaken),
+              `Failed` = sum(nCoursesFailed),
+              `Withdrawls` = sum(nWithdrawls),
+              `Pass Rate` = percent((`Attempts` - `Failed` - `Withdrawls`) / Attempts),
+              `Earn B or Higher` = percent(sum(nBorHigher) / Attempts),
+              `Earn B+ or Higher` = percent(sum(nBplusOrHigher) / Attempts),
+              `Earn A- or Higher` = percent(sum(nA) / Attempts))) %>%
+   mutate(Proportion = percent(`Unique Scholars taking CS` / nTotal),
+          `Avg. # Courses per Scholar` = signif(`Attempts` / `Unique Scholars taking CS`, 2)) %>%
+  unite(`Scholars taking CS Freshman Year`, `Unique Scholars taking CS`, nTotal, sep = " / ") %>%
+  unite(`Scholars taking CS Freshman Year`, `Scholars taking CS Freshman Year`, Proportion, sep = " = ") %>%
+   select(`SA Status`, `Scholars taking CS Freshman Year`, `Avg. # Courses per Scholar`, `Pass Rate`, `Earn B or Higher`, `Earn B+ or Higher`, `Earn A- or Higher`) %>%
+   pander(split.cells = c(15,25,10,15,15,15),
+          caption = "\\label{table:cs-freshman-year}Performance of Scholars taking CS as a Freshman")
+```
+
+Scholars who took the Computer Science elective during Summer Academy were **2.5 as likely to have an Intended Major in Computer Science** as Scholars who did not attend Summer Academy, and **four times as likely** as those who attend Summer Academy but did not take the Computer Science elective (Table \ref{table:intended-cs-majors}). _Note: the CS elective was mandatory for the 2018 cohort, and so there is less reason to suspect selection bias._
+```{r}
+scholar_metadata %>%
+  filter(Cohort > 2015,
+         Cohort < 2019) %>%
+  mutate(`SA Status` = ifelse(`SA Computer Science`, "Took SA CS", 
+                              ifelse(`# SA Cohorts` > 0, "SA w/o CS", "No SA")),
+         `SA Status` = factor(`SA Status`, levels = c("No SA", "SA w/o CS", "Took SA CS")),
+         `Intended Major` = ifelse(grepl("Computer Science", `Intended Major`), "Intend to Major in CSC", "Other Major")) %>%
+  group_by(`SA Status`, `Intended Major`) %>%
+  summarise(nMajors = n()) %>%
+  transmute(`Intended Major`, prop = percent(nMajors/sum(nMajors))) %>%
+  spread(`Intended Major`, prop) %>%
+  pander(split.cells = c(20, 20, 20),
+         caption = "\\label{table:intended-cs-majors}Prevalence of Intended CS Major, by SA Status")
+```
+
+Scholars who took the Computer Science elective during Summer Academy were **8.4 times as likely to have a Current Major in Computer Science** as Scholars who did not attend Summer Academy, and **4.5 times as likely** as those who attended Summer Academy but did not take the Computer Science elective (Table \ref{table:current-cs-majors}). _Note: no scholars who have taken the Computer Science elective have yet graduated, so we report only on Current Major and not Major Upon Graduation. We restrict our analysis to those Scholars who have completed at least one year of college coursework._
+
+```{r}
+scholar_metadata %>%
+  filter(`# Years of College` >= 1,
+         Cohort > 2015,
+         Cohort < 2019) %>%
+  mutate(`SA Status` = ifelse(`SA Computer Science`, "Took SA CS", 
+                              ifelse(`# SA Cohorts` > 0, "SA w/o CS", "No SA")),
+         `SA Status` = factor(`SA Status`, levels = c("No SA", "SA w/o CS", "Took SA CS")),
+         `Current Major` = ifelse(grepl("Computer Science", `Current Major`), "Current Major in CSC", "Other Major")) %>%
+  group_by(`SA Status`, `Current Major`) %>%
+  summarise(nMajors = n()) %>%
+  transmute(`Current Major`, prop = percent(nMajors/sum(nMajors))) %>%
+  spread(`Current Major`, prop) %>%
+  pander(split.cells = c(20, 20, 20),
+         caption = "\\label{table:current-cs-majors}Prevalence of Current CS Major, by SA Status")
+```
+
+Scholars who took the Computer Science elective are also taking advanced computer science coursework (CS2 and beyond) at a  greater rate than those who did not attend Summer Academy: **they are 12.8 times more likely to take CS2 / Data Structures during their Freshman year** than a student who did not attend Summer Academy, and **6 times more likely** to do so than a student who attended Summer Academy but did not opt into the Computer Science elective (Table \ref{table:cs-GPA-freshman}).
+
+
+```{r}
+# Course attempts, by SA and SA CS status
+scholar_metadata %>%
+  mutate(`SA Status` = ifelse(`SA Computer Science`, "Took SA CS", 
+                              ifelse(`# SA Cohorts` > 0, "SA w/o CS", "No SA")),
+         `SA Status` = factor(`SA Status`, levels = c("No SA", "SA w/o CS", "Took SA CS"))) %>%
+  #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+  group_by(`SA Status`) %>%
+  summarise(nTotal = n()) %>%
+  left_join(
+    cs_courses %>%
+    #group_by(`SAT Group`) %>% # Uncomment to break down by SAT Group
+    filter(`CS Course Level` %in% c("CS1", "CS2", "CS Elective")) %>%
+    group_by(`Scholar ID`, `SA Status`, `CS Course Level`) %>%
+    summarise(nCoursesTaken = n(),
+              nCoursesFailed = sum(`Course GPA (Normalized)` == 0 &
+                                   !(`Course Grade` == "Pass/Credit")),
+              nWithdrawls = sum(`Course Grade` == "Withdrawn"),
+              nSatisfactory = sum(Performance %in% c("B+ or above", "B or above"))) %>%
+    #group_by(`SAT Group`) %>%  # Uncomment to break down by SAT Group
+    group_by(`SA Status`, `CS Course Level`) %>%
+    summarise(`Unique Scholars taking CS` = n(),
+              `Attempts` = sum(nCoursesTaken),
+              `Failed` = sum(nCoursesFailed),
+              `Withdrawls` = sum(nWithdrawls),
+              `Pass` = `Attempts` - `Failed` - `Withdrawls`,
+              `Earn B+ or Higher` = sum(nSatisfactory))) %>%
+   mutate(Proportion = percent(`Unique Scholars taking CS` / nTotal),
+          `Avg. # Courses per Scholar` = signif(`Attempts` / `Unique Scholars taking CS`, 2)) %>%
+  unite(`Scholars taking CS Freshman Year`, `Unique Scholars taking CS`, nTotal, sep = " / ") %>%
+  unite(`Scholars taking CS Freshman Year`, `Scholars taking CS Freshman Year`, Proportion, sep = " = ") %>%
+  
+    # Calculate 95% CI for Pass Rate
+    rowwise() %>%
+    mutate(tst = list(broom::tidy(prop.test(`Pass`, `Attempts`, conf.level=0.95)))) %>%
+    tidyr::unnest(tst) %>%
+    mutate(`Pass Rate` = percent(estimate, 0.1),
+             `95% CI` = paste("\\\n95% CI = [",
+                              percent(conf.low, 0.1), ", ",
+                              percent(conf.high, 0.1),"]\\\n",
+                              sep = "")) %>%
+    unite("Pass Rate", `Pass Rate`, `95% CI`, sep = " ") %>%
+  
+    # Drop unneeded fields from unnest
+    select(-estimate,-statistic,-p.value,-parameter,-conf.low,-conf.high,-method,-alternative) %>%
+  
+    # Calculate 95% CI for Satisfactory Rate
+    rowwise() %>%
+    mutate(tst2 = list(broom::tidy(prop.test(`Earn B+ or Higher`, `Attempts`, conf.level=0.95)))) %>%
+    tidyr::unnest(tst2) %>%
+    mutate(`Earn B+ or Higher` = percent(estimate, 0.1),
+             `95% CI` = paste("\\\n95% CI = [",
+                              percent(conf.low, 0.1), ", ",
+                              percent(conf.high, 0.1),"]\\\n",
+                              sep = "")) %>%
+    unite("Earn B+ or Higher", `Earn B+ or Higher`, `95% CI`, sep = " ") %>%
+   select(`CS Course Level`, `SA Status`, `Scholars taking CS Freshman Year`, `Pass Rate`, `Earn B+ or Higher`) %>%
+   arrange(`CS Course Level`) %>%
+   pander(split.cells = c(15,25,25,25,25),
+          caption = "\\label{table:cs-GPA-freshman}Performance of Scholars taking CS as a Freshman")
+```
+
+## Impact on College Access
+
+In 2018-2019, Summer Academy transitioned from a day program to a residential model, beginning with the Scholars at the Amherst site in 2018 (approximately half of the incoming Scholars in the 2019 cohort) and moving to a fully-residential progranm at both sites in 2019. The decision to host the residential pilot at Amherst College was due in part to a perceieved benefit to exposing Scholars to a collegiate environment that was different from the larger city universities toward which Scholars tended to gravitate. It was hypothesized that this inclination might be in part an issue of of awareness, and that this exposure might in turn encourage Scholars to apply to schools in this class: small, rural, elite institutions.
+
+Table \ref{table:recent-SA-top-colleges} compares the Top-enrolled institutions for Scholars who participated in a non-residential Summer Academy with those who attended the residential pilot.
+
+```{r}
+nonResScholars2019 = read_csv("SA Location.csv") %>%
+    filter(`SA Location` == "USC") %>%
+    select(`Scholar ID`)
+
+nonResScholars = scholar_metadata %>%
+  filter((`Completed SA as Junior` == 1 & `SA Cohort` < 2018) |
+           (`Scholar ID` %in% nonResScholars2019$`Scholar ID`)) %>%
+  rename(`Institution` = `Scholar College`) %>%
+  filter(Cohort >= 2018) # Restrict to most recent cohorts
+
+residentialScholars <- read_csv("SA Location.csv") %>%
+  filter(`SA Location` == "Amherst") %>%
+  left_join(scholar_metadata, by = c("Scholar ID")) %>%
+  rename(`Institution` = `Scholar College`) %>%
+  select(-`College Name`, -`SA Location`, -`Scholar Full Name`)
+```
+
+```{r}
+nonResTop10Institutions = nonResScholars %>%
+  group_by(`Institution`) %>%
+  summarise(`# Scholars Attending` = n()) %>%
+  arrange(desc(`# Scholars Attending`)) %>%
+  ungroup() %>%
+  group_by(`Institution` = factor(c(as.character(`Institution`)[1:6], rep("Other Institutions", n() - 6)),
+                            levels = c(as.character(`Institution`)[1:6], "Other Institutions"))) %>%
+  summarise(ninst = n(), `# Scholars Attending` = sum(`# Scholars Attending`)) %>%
+  select(-ninst) %>%
+  mutate(`SA Model` = "Non-Residential")
+
+resTop10Institutions = residentialScholars %>%
+  group_by(`Institution`) %>%
+  summarise(`# Scholars Attending` = n())  %>%
+  arrange(desc(`# Scholars Attending`)) %>%
+  ungroup() %>%
+  group_by(`Institution` = factor(c(as.character(`Institution`)[1:6], rep("Other Institutions", n() - 6)),
+                            levels = c(as.character(`Institution`)[1:6], "Other Institutions"))) %>%
+  summarise(ninst = n(), `# Scholars Attending` = sum(`# Scholars Attending`)) %>%
+  select(-ninst) %>%
+  mutate(`SA Model` = "Residential")
+
+rbind(nonResTop10Institutions, resTop10Institutions) %>%
+  select(`SA Model`, `Institution`, `# Scholars Attending`) %>%
+  pander(justify = c('center', 'left', 'center'), 
+         split.cells = c(10, 60, 10),
+         caption = "\\label{table:recent-SA-top-colleges}Top Institutions by Enrollment for Scholars with non-Residential vs. Residentail SA as a Junior (2018-2019 Cohorts only)")
+```
+
+According to SCS Noonan Scholars, rising high school seniors who were part of the residential Summer Academy also had many more college admissions workshops, opportunities to meet with their College Access coach one-on-one, and participated in 6 or more visits to Top-100 colleges. In addition, they left Summer Academy with a list of the colleges to which they planned to apply, a completed draft of their college application essay, and their common application completed. 
+
+Table \ref{table:recent-SA-college-rank} compares the rate at which Scholars with non-residential Summer Academy enrolled in top-ranked institutions with those who attended the residential model.
+
+```{r}
+rbind(nonResScholars %>%
+  summarise(Group = "Non-Residential SA as a Junior",
+            `% attending Ivy-Plus School` = percent(sum(IvyPlus)/n()),
+            `% attending Top-50 School` = percent(sum(`College Forbes Ranking 2018` <= 50, na.rm = TRUE)/n()),
+            `% attending Top-100 School` = percent(sum(`College Forbes Ranking 2018` <= 100, na.rm = TRUE)/n()),
+            `% attending Lower-Ranked School` = percent(sum(`College Forbes Ranking 2018` > 100, na.rm = TRUE)/n()),
+            `% missing` = percent(sum(is.na(`College Forbes Ranking 2018`)) / n())),
+
+residentialScholars %>%
+  summarise(Group = "Residential SA as a Junior",
+            `% attending Ivy-Plus School` = percent(sum(IvyPlus)/n()),
+            `% attending Top-50 School` = percent(sum(`College Forbes Ranking 2018` <= 50, na.rm = TRUE)/n()),
+            `% attending Top-100 School` = percent(sum(`College Forbes Ranking 2018` <= 100, na.rm = TRUE)/n()),
+            `% attending Lower-Ranked School` = percent(sum(`College Forbes Ranking 2018` > 100, na.rm = TRUE)/n()),
+            `% missing` = percent(sum(is.na(`College Forbes Ranking 2018`)) / n()))
+)   %>%
+  pander(split.cells = c(40,10, 10, 10, 10,10),
+         caption = "\\label{table:recent-SA-college-rank}Scholars Attending Top Schools, Residential vs. non-Residential SA")
+
+
+```
+
+The difference is striking. In particular, Scholars who attended the residential model:
+
+- Enrolled in an Ivy-Plus institution **3.2 times as often** than those who attended the non-residential model.
+- Enrolled in a Top-50 ranked institution **1.4 times as often**.
+- Enrolled in a Top-100 ranked institution **1.1 times as often**.
+
+While we do not have sufficient data to assert that the shift in model is responsible for these changes, we can rule out several potential confounding factors. Scholars in both models (2018 and 2019 cohorts):
+
+- Had comparable SAT Percentiles (83.50 ± 10.89 for non-residential, 86.27	± 10.43 for residential)
+- Had comparable High School GPAs (3.80	± 0.18 for non-residential, 3.87 ± 0.16 for residential)
+- Had comparable income levels (134.27%FPL ± 76.21% for non-residential, 141.68% ± 78.03% for residential)
+
+However, Scholars participating in the residential program were recruited from a national pool, which would likely have influenced their awareness of a larger variety of postsecondary institutions. It will be interesting to continue to monitor the influence of the residential model in future cohorts.
+
+```{r eval = F}
+rbind(nonResScholars, residentialScholars) %>%
+  group_by(`SA Model`) %>%
+  summarise(`# Scholars` = n(),
+            `Average SAT Percentile` = round(mean(`SAT Percentile`, na.rm = T), 2),
+            `Standard Deviation` = paste("±", round(sd(`SAT Percentile`, na.rm = T), 2)))
+
+rbind(nonResScholars, residentialScholars) %>%
+  group_by(`SA Model`) %>%
+  summarise(`# Scholars` = n(),
+            `Average HS Unweighted GPA` = round(mean(`HS Unweighted GPA`, na.rm = T), 2),
+            `Standard Deviation` = paste("±", round(sd(`HS Unweighted GPA`, na.rm = T), 2)))
+
+rbind(nonResScholars, residentialScholars) %>%
+  group_by(`SA Model`) %>%
+  summarise(`# Scholars` = n(),
+            `Average Federal Poverty Level Percentage` = round(mean(`Federal Poverty Level Percentage`, na.rm = T), 2),
+            `Standard Deviation` = paste("±", round(sd(`Federal Poverty Level Percentage`, na.rm = T), 2)))
+
+rbind(nonResScholars, residentialScholars) %>%
+  group_by(`SA Model`) %>%
+  summarise(`# Scholars` = n(),
+            `% # First Gen` = sum(`First Generation College Student` ==  1) / n(),
+            `% Women` = sum(`Gender` ==  "Female") / n(),
+            `% Black or Latinx` = sum(`Black or African American` ==  1 | `Hispanic or Latinx` ==  1) / n())
+```
+
+# Recommendations and Future Directions
+
+The preceeding analysis has demonstrated that on average, the Summer Academy program has a significant positive impact on participating Scholars' academic performance. It is important to note, however, that this is just one factor in the complex narrative of Scholar's college experience. In order to achieve the program's objectives, we must look deeply at the ways in which Scholars may not benefit equally from what the program has to offer, and to collect additional data in service of that investigation.
+
+## The Role of Prior Preparation
+
+We have found in many of the previous models that a Scholar's prior preparation (as evidenced by their performance on SATs, e.g.) plays an important role in predicting their academic success in college. If we control for this prior preparation, there is nonetheless a clear relationship both between Scholars' academic performance upon graduation and their participation in Summer Academy: those who attend one session of Summer Academy have an average gain of 0.058 on their GPA upon graduation ($p < 0.00001$), and those who attend two sessions of Summer Academy have an average gain of 0.197 on their GPA upon graduation ($p < 0.00001$).
+
+
+```{r}
+all_alums = scholar_metadata %>%
+  left_join(scholar_transcripts) %>%
+  filter(`Scholar Status` == "Scholar Alumni",
+         `SAT Percentile` > 10) %>% # Remove outlier
+  mutate(`# SA Cohorts` = factor(`# SA Cohorts`, labels = c("No SA", "1 Year", "2 Years")))
+```
+
+```{r, eval = F}
+lm_all_GPA = lm(`Reported Total GPA` ~ `# SA Cohorts` + `SAT Percentile`+ log10(`College Forbes Ranking 2018`), data = all_alums)
+
+pander(lm_all_GPA,
+       caption = "Linear Regression of GPA for All Scholar Alumni",
+       split.cells = c(20,20,20, 20, 20))
+```
+
+However, if we fit a natural spline (a variation of linear regression that allows for flexibility at points in the line there there is a "shift" in the relationship between the predictors and the response, Figure 7), we observe that SAT scores appear to have a very different relationship with GPA after around the 85th percentile:
+
+```{r, fig.height = 3.3, fig.width = 7, fig.align = "left"}
+library(splines)
+
+# Get min/max values of SAT percentile using the range() function
+SATlims = all_alums %>%
+    select(`SAT Percentile`) %>%
+    range(na.rm = T)
+
+# Generate a sequence of SAT Math values spanning the range
+SAT_grid = seq(from = min(SATlims), to = max(SATlims))
+
+GPA_by_SAT_spline = lm(`Reported Total GPA` ~ ns(`SAT Percentile`, df = 3), data = all_alums)
+pred = predict(GPA_by_SAT_spline, newdata = list(`SAT Percentile` = SAT_grid), se = TRUE)
+
+# Compute error bands (2*SE)
+se_bands = with(pred, cbind("upper" = fit+2*se.fit, 
+                            "lower" = fit-2*se.fit))
+
+# Plot the natural spline
+ggplot() +
+  geom_point(data = all_alums, 
+             aes(x = `SAT Percentile`, y = `Reported Total GPA`),
+             size = 1) +
+  geom_line(aes(x = SAT_grid, y = pred$fit), color = "#0000FF") +
+  geom_vline(aes(xintercept = 85), color = "darkgrey", linetype = "dashed") +
+  geom_text(aes(x = 85, y = 0.7), 
+            angle = 90, vjust = -0.5, size = 4,
+            color = "darkgrey",
+            label = "85th percentile") +
+  ylab("Reported GPA") +
+  xlab("Fig. 7 Natural Spline of GPA by SAT Percentile") +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=0.5),
+        axis.title.x = element_text(color = "grey20", size = 10, angle = 0, hjust = .5, vjust = 0, face = "plain", family="Times"))
+```
+
+Roughly **one third of all Scholars** fall above this range (Figure 8):
+
+```{r, fig.height = 3.1, fig.width = 7, fig.align = "left"}
+all_alums %>%
+  ggplot(aes(x = `SAT Percentile`)) +
+  geom_density(alpha = 0.3, fill = "lightblue") + 
+  geom_vline( aes(xintercept = 85), 
+              linetype = "dashed") +
+  geom_text(aes(x = 85),
+                y = 0.01, angle=90, vjust = -0.5,
+                label = "85th percentile",
+            size = 2.5) +
+  xlab("SAT Percentile") +      # Label the x-axis
+  ylab("Density") +     # Label the y-axis`
+  scale_y_continuous(expand=c(0,0)) +
+  theme(axis.text.x = element_text(angle = 88, vjust = 0.5, hjust=1)) +
+  guides(fill = FALSE,
+         color = FALSE) +
+  ylab("Density") +
+  xlab("Fig. 8 Density of SAT Percentile") +
+  theme(axis.text.x = element_text(vjust = 0.5, hjust=0.5),
+        axis.title.x = element_text(color = "grey20", size = 10, angle = 0, hjust = .5, vjust = 0, face = "plain", family="Times"))
+```
+
+If we consider only those Scholars whose SAT Scores were **within the 75th-85th percentile**, the data tells a very different story: 
+
+ - For Scholars with an **SAT score within the 75th-85th percentile**, we would expect to see **an average increase of 0.092** in their overall GPA upon graduation for those who attend one session of Summer Academy (more than **1.5 times as much** as the overall collection of Scholars who attend one session of Summer Academy, $p < 0.0001$).
+ - For those who attend two sessions of Summer Academy, we would still expect to see **an average increase of 0.179**, comparable to that of the overall collection who attend a second session ($p < 0.01$).
+
+```{r, eval = F}
+all_alums %>%
+  summarise(over80 = sum(`SAT Percentile` > 80) / n(),
+            over85 = sum(`SAT Percentile` > 85) / n())
+
+all_alums_mid_SAT = all_alums %>%
+  filter(`SAT Percentile` <= 85,
+         `SAT Percentile` >= 75)
+  
+lm_mid_SAT_GPA = lm(`Reported Total GPA` ~ `# SA Cohorts` + `SAT Percentile` + log10(`College Forbes Ranking 2018`), data = all_alums_mid_SAT)
+
+pander(lm_mid_SAT_GPA,
+       caption = "Linear Regression of GPA for 75th-80th SAT Percentile",
+       split.cells = c(20,20,20, 20, 20))
+```
+
+
+This suggests that Scholars in this middle group are the ones that benefit most significantly from Summer Academy. However, average SAT Scores of admitted Scholars have been steadily increasing (and the range of scores decreasing) since 2016. This suggests the need for a reassessment of recruitment and admittance criteria for the program.
+
+## Institutional Differences
+
+The following example has insufficient sample size to merit statistical validation, but serves instead as food for thought. Consider the following two groups of institutions. The average GPA for Scholars from the 2012-2018 attending instiutions in Table \ref{table:groupA}: Group A cohorts is 3.25, and the average GPA for Scholars from the same cohorts attending instiutions in Table \ref{table:groupB}: Group B is 3.23.
+
+```{r weirdo-schools}
+SA_improvement = scholar_metadata %>%
+  filter(Cohort < 2018) %>%
+  mutate(`Attended SA?` = `# SA Cohorts` > 0) %>%
+  group_by(`Scholar College`, `Attended SA?`) %>%
+  summarise(n = n(),
+            avgGPA = mean(`Reported Total GPA`)) %>%
+  gather(variable, value, -(`Scholar College`:`Attended SA?`)) %>%
+  unite(temp, `Attended SA?`, variable) %>%
+  spread(temp, value) %>%
+  rename(`Avg. GPA (No SA)` = FALSE_avgGPA,
+         `Number Scholars (No SA)` = FALSE_n,
+         `Avg. GPA (Attended SA)` = TRUE_avgGPA,
+         `Number Scholars (Attended SA)` = TRUE_n) %>%
+  filter(`Number Scholars (No SA)` > 2 & `Number Scholars (Attended SA)` > 2) %>%
+  mutate(`SA Improved?` = ifelse(`Avg. GPA (Attended SA)` - `Avg. GPA (No SA)` >= 0.2, "Yes", 
+                                 ifelse(`Avg. GPA (No SA)` - `Avg. GPA (Attended SA)` >= 0.2, "No", "")))
+
+improved_schools = SA_improvement %>%
+  filter(`SA Improved?` == "Yes") %>%
+  select(`Scholar College`)
+
+unimproved_schools = SA_improvement %>%
+  filter(`SA Improved?` == "No") %>%
+  select(`Scholar College`)
+```
+
+
+```{r }
+SA_improvement %>%
+  filter(`SA Improved?` == "Yes") %>%
+  rename(Institution = `Scholar College`) %>%
+  select(-`Number Scholars (Attended SA)`,-`Number Scholars (No SA)`, -`SA Improved?`) %>%
+  pander(caption = "\\label{table:groupA}Group A")
+```
+
+```{r}
+SA_improvement %>%
+  filter(`SA Improved?` == "No") %>%
+  rename(Institution = `Scholar College`) %>%
+  select(-`Number Scholars (Attended SA)`,-`Number Scholars (No SA)`, -`SA Improved?`) %>%
+  pander(caption = "\\label{table:groupB}Group B")
+```
+
+Observe that for instiutions in Group A, the average GPA for Scholars who attended Summer Academy is at a minimum 0.2 higher than for those who did not, and that for instiutions in Group B the opposite is true. Is this simply a numerical anomaly, or is there something setting these two groups apart that is not captured in the presently-collected data? 
+
+## **Recommendation 1:** Establish Metrics for Post-Collegiate Success {-}
+The stated mission of SCS Noonan Scholars is ``to help high-achieving low-income underrepresented students get into and graduate from top colleges **equipped to achieve their full career potential**.'' In service of this mission, it is critically important to understand not only the impact of the program in the short term, but whether or not Scholars are in fact able to reach their full career potential. Of the 355 Scholar Alumni in the dataset, 313 are presently missing values in both the \texttt{6 Months Post College: Employment Status} and \texttt{6 Months Post College: Graduate School} fields.  In order to understand the longer-term impact of the program on Scholar success, we recommend that SCS Noonan Scholars articulate clear, measurable goals for Scholars' post-undergraduate success and implement a strategy to track progress toward those goals.
+
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, eval = FALSE}
+scholar_metadata %>%
+  filter(`Scholar Status` == "Scholar Alumni") %>%
+  group_by(is.na(`6 Months Post College: Employment Status`) & is.na(`6 Months Post College: Graduate School`)) %>%
+  summarise(n = n())
+```
+
+## **Recommendation 2:** Report Summer Academy Course Selection {-}
+Variation in content and teaching style are not captured in the current data, nor are Scholar's choice between a second course in writing or a second course in mathematics for those who attend a second session of Summer Academy. This limits the analysis to a coarse \texttt{Attended} / \texttt{Did Not Attend} level of detail which may mask many of the more subtle influences these decisions have on the relationship between Scholars' experiences at Summer Academy and their collegiate success. Should the organization decide to continue to pursue quantitative metrics in, evaluating its efficacy, it is our recommendation that SCS Noonan Scholars formulate a more rigorous data collection strategy and experimental methodology in consultation with a statistician or data scientist.
+
+## **Recommendation 3:** Document Summer Academy Programming and Mentoring {-}
+In addition to their experiences in the classroom, Summer Academy provides a unique opportunity for Scholars to develop critical competencies regarding self-advocacy, time management skills, constructive dialogue with peers, and engagement with faculty. This capacity has only been increased since the program's shift toward a residential Summer Academy beginning in 2018. In addition, the program has an impressive mentorship network (both traditional and peer) that connect Scholars to the community supports that are essential for their success in college. Despite the importance of the work being done in these areas through SCS Noonan Scholars, at present it appears that data collection on the programming and ongoing mentorship may be insufficient. As such, many of the program's most powerful mechanisms for scaffolding Scholar success remain undocumented, and so the effectiveness of these specific approaches is impossible to assess. We recommend that SCS Noonan Scholars consider establishing a protocol for tracking which Scholars are exposed to which programming, and develop a regular schedule for evaluating the impact of the specific interventions that are being employed.
+
+
+
+\pagebreak
+# Appendix I: Details of the Scholar Metadata Dataset {-}
+
+### AI.1 Demographic Information {-}
+The first 12 fields in the Scholar Metadata dataset contain identifiers and demographic information about each scholar.
+
+Field Name              | Description
+----------------------- | -----------
+\texttt{Scholar ID}     | a 15-digit unique identifier for each Scholar
+&nbsp;                  |
+\texttt{Gender}         | one of (\texttt{Male}, \texttt{Female}, \texttt{Non-Binary})
+&nbsp;                  |
+\texttt{Black or African American}  |  1 if Scholar identifies as Black or African American, 
+&nbsp;                              | 0 otherwise
+&nbsp;                  |                               
+\texttt{Hispanic or Latinx} | 1 if Scholar identifies as Hispanic or Latinx, 0 otherwise
+&nbsp;                  |                                  
+\texttt{Native Hawaiian or Pacific Islander} |  1 if Scholar identifies as Native Hawaiian or Pacific Islander, 
+&nbsp;                                       | 0 otherwise
+&nbsp;                  |                                  
+\texttt{Asian}          | 1 if Scholar identifies as Asian, 0 otherwise
+&nbsp;                  |      
+\texttt{American Indian or Alaska Native} | 1 if Scholar identifies as American Indian or Alaska Native, 
+&nbsp;                                    | 0 otherwise
+&nbsp;                  |               
+\texttt{White}          | 1 if Scholar identifies as White, 0 otherwise
+&nbsp;                  |         
+\texttt{Family Income}  | annual household income in $USD for Scholar's family of origin
+&nbsp;                  |             
+\texttt{Family Size}    | number of individuals in Scholar's family of origin
+&nbsp;                  |
+\texttt{Federal Poverty Level Percentage} | % above or below the 2018 US Federal Poverty Level 
+&nbsp;                                    | for Scholar's family of origin
+&nbsp;                  |              
+\texttt{First Generation College Student} | 1 if Scholar identifies as a First Generation College Student, 
+&nbsp;                                    | 0 otherwise
+
+### AI.2 High School and Standardized Testing Information {-}
+The next 8 fields in the dataset contain information about each Scholar's high school experience, as well as their performance on the SATs.
+
+Field Name              | Description
+----------------------- | -----------
+\texttt{High School}    | a character string containing the name of the Scholar's high school
+&nbsp;                  |
+\texttt{High School Graduation Year} &nbsp; &nbsp; &nbsp; | a value from 2012-2020 representing the year in which the Scholar 
+&nbsp;                  | graduated from high school
+&nbsp;                  |
+\texttt{HS Unweighted GPA} | a value from 0-4.3 representing the Scholar's unweighted
+&nbsp;                  |   high school GPA 
+&nbsp;                  |
+&nbsp;                  | _Note: though GPA is ranked on a 0-4.0 scale, the inclusion of AP_
+&nbsp;                  | _coursework can result in an unweighted high school GPA > 4.0._
+&nbsp;                  |
+\texttt{Class Rank}     | the Scholar's rank in their high school class
+&nbsp;                  |                               
+\texttt{Class Size}     | the total number of students in the Scholar's high school class
+&nbsp;                  |          
+\texttt{SAT Math}       | a value from 200-800 representing the Scholar's SAT Math score
+&nbsp;                  |  
+\texttt{SAT Critical Reading}       | a value from 200-800 representing the Scholar's
+&nbsp;                  | SAT Critical Reading score
+&nbsp;                  |  
+\texttt{SAT Total}      | a value from 400-2400 representing the Scholar's Total SAT score
+&nbsp;                  |  
+&nbsp;                  | _Note: from 2011 to 2015, the reference range for the SATs was_
+&nbsp;                  | _600-2400 due to the inclusion of the SAT Writing exam. Beginning_
+&nbsp;                  | _in 2016, the exam returned to a reference range of 400-1600._
+
+
+### AI.3 Cohort and College Information {-}
+The next 16 fields in the dataset contain information about each Scholar's participation in the SCS Noonan Scholars program, their chosen college, major, and their collegiate academic performance to date.
+
+Field Name              | Description
+----------------------- | -----------
+\texttt{Scholar Status} | one of (\texttt{Current Scholar}, \texttt{Scholar Alumni}) representing the 
+&nbsp;                  | Scholar's current status
+&nbsp;                  |
+\texttt{Scholar Secondary Status} | a character string containing additional information regarding the
+&nbsp;                  | Scholar's current status
+&nbsp;                  |
+\texttt{Last Renewal Date} | the most recent academic semester in which the Scholar 
+&nbsp;                  | renewed their Scholar status
+&nbsp;                  |
+\texttt{SA Cohort}      | a value from 2012-2020 representing the Scholar's Summer Academy cohort
+&nbsp;                  | _Note: this field is left blank for Scholars who have not attended SA._
+&nbsp;                  |
+\texttt{\# SA Cohorts}  | a value from 0-2 representing the number of summers the Scholar has
+&nbsp;                  | attended Summer Academy
+&nbsp;                  |
+\texttt{SA Chemistry}| 1 if the Scholar enrolled in the Chemistry
+&nbsp;                  |  elective during Summer academy, 0 otherwise
+&nbsp;                  |
+\texttt{SA Computer Science}| 1 if the Scholar enrolled in the Computer Science
+&nbsp;                  |  elective during Summer academy, 0 otherwise
+&nbsp;                  |
+\texttt{Scholar College}| a character string containing the name of the Scholar's college
+&nbsp;                  |
+\texttt{College: Forbes Ranking} | a value from 1-651 representing the 2017 Forbes Magazine
+&nbsp;                  | ranking of the Scholar's college
+&nbsp;                  |
+\texttt{Intended Major} | a character string representing the Scholar's intended major
+&nbsp;                  |
+\texttt{Intended Major STEM?} | 1 if the Scholar's intended major is a STEM discipline,
+&nbsp;                  | 0 otherwise
+&nbsp;                  |
+\texttt{College Graduation Year} | a value from 2015-2023 representing the year in which the Scholar 
+&nbsp;                  | graduated / will graduate from college, appended with `W` if the Scholar
+&nbsp;                  | is / will be a winter graduate
+&nbsp;                  |
+\texttt{\# of College Terms} | a value from 0-17 representing the number of college terms that 
+&nbsp;                  | have elapsed since the Scholar began college
+&nbsp;                  | _Note: this field includes both completed terms and leaves of absence._
+&nbsp;                  |
+\texttt{Current Major}  | a character string representing the Scholar's current major
+&nbsp;                  |
+\texttt{Current Major STEM?} | 1 if the Scholar's current major is a STEM discipline,
+&nbsp;                  | 0 otherwise
+&nbsp;                  |
+\texttt{Reported Total GPA} | a value from 0-4.0 representing the Scholar's most recent 
+&nbsp;                  |  self-reported collegiate GPA 
+&nbsp;                  |  
+
+### AI.4 After-College Information {-}
+The final 4 fields in the provided dataset contain information about each Scholar's degree, student loan burden, and post-graduate plans.
+
+Field Name              | Description
+----------------------- | -----------
+\texttt{College Degree Earned Type}      | one of (\texttt{B.A.}, \texttt{B.S.}, \texttt{B.Eng}) represening the type of 
+&nbsp;                  | undergraduate degree earned by the Scholar
+&nbsp;                  | _Note: this field is left blank for Scholars who have not yet_
+&nbsp;                  | _completed their degree._
+&nbsp;                  |
+\texttt{Estimated Student Loans at Graduation} | one of (\texttt{No Student Loans}, \texttt{Less than 5,000}, \texttt{5,000-9,999},
+&nbsp;                  | &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;\texttt{10,000-19,999}, \texttt{20,000-29,999}, \texttt{More than 30,000})
+&nbsp;                  | representing the Scholar's estimated student loan burden
+&nbsp;                  | in $USD upon graduation.
+&nbsp;                  |
+\texttt{6 Months Post College:} | one of (\texttt{"Employed, full-time"}, \texttt{"Employed, part-time"},
+&nbsp;&nbsp;&nbsp;&nbsp;\texttt{Employment Status} | &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;\texttt{"Not employed, and not seeking employment"}, 
+&nbsp;                  |&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;\texttt{"Not employed, but seeking employment"},
+&nbsp;                  |&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;\texttt{"Volunteer, service, or gap year program"})
+&nbsp;                  |
+\texttt{6 Months Post College:} | one of (\texttt{Yes}, \texttt{No}, \texttt{Eventually}) representing the Scholar's
+&nbsp;&nbsp;&nbsp;&nbsp;\texttt{Graduate School} | intention to pursue graduate study
+
+
+### AI.5 Calculated and Supplemental Fields {-}
+In addition to the provided data, several additional fields were calculated and appended to the original dataset to facilitate analysis.
+
+Field Name              | Description
+----------------------- | -----------
+\texttt{Family Income per Capita} | \texttt{Family Income} / \texttt{Family Size}
+&nbsp;                  |
+\texttt{\# Years of College} | \texttt{College Graduation Year} - \texttt{HS Graduation Year}
+&nbsp;                  | _Note: this field includes both completed years and leaves of absence._
+&nbsp;                  |        _Scholars graduating in the winter have 0.5 years deducted._
+&nbsp;                  |
+\texttt{\# Years to Graduate} | \texttt{\# Years of College} if Scholar has graduated, otherwise blank
+&nbsp;                  |
+\texttt{SAT Group}      | a coarser granulation of SAT Percentile, 
+&nbsp;                  | one of (\texttt{<50th}, \texttt{50th-80th}, \texttt{>80th})
+&nbsp;                  |
+\texttt{STEM Persistence} | one of (\texttt{Persisted in non-STEM}, \texttt{Dropped STEM}, 
+&nbsp;                  | &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; \texttt{Added STEM}, \texttt{Persisted in STEM}) 
+&nbsp;                  | indicating the relationship between the Scholar's intended and current
+&nbsp;                  | major category
+&nbsp;                  |
+\texttt{SAT Percentile} | a value ranging from 2-100 representing the percentile rank of the
+&nbsp;                  | Scholar's composite SAT score, as reported by the College Board in the
+&nbsp;                  | year in which the examination was taken
+
+# Appendix II: Details of the Scholar Transcript Dataset {-}
+
+### AII.1 Identifiers and Demographic {-}
+Field Name              | Description
+----------------------- | -----------
+\texttt{Scholar ID}     | a 15-digit unique identifier for each Scholar
+&nbsp;                  | _Note: this corresponds to the field of the same name in_
+&nbsp;                  | _\texttt{Scholar Metadata.csv} and is used as a key to join these datasets._
+&nbsp;                  |
+\texttt{College Year}   | the grade level for which the transcript was recorded, one of:
+&nbsp;                  | (\texttt{Freshman},\texttt{Sophomore},\texttt{Junior},\texttt{Senior},\texttt{Super Senior})
+&nbsp;                  |
+\texttt{Transcript Year}|	the calendar year in which the transcript was recorded
+&nbsp;                  |
+\texttt{Transcript Term}| the academic term in which the transcript was recorded, one of:
+&nbsp;                  | (\texttt{Fall},\texttt{Spring},\texttt{Winter},\texttt{Summer})
+&nbsp;                  |
+\texttt{Transcript 18 ID} | an 18-digit unique identifier for each transcript
+&nbsp;                  | _Note: transcripts are submitted after each semester; a single Scholar_
+&nbsp;                  | _may have multiple transcripts included the dataset._
+&nbsp;                  |
+\texttt{Course 18 ID} | an 18-digit unique identifier for each course attempt taken by a Scholar
+&nbsp;                  | _Note: these identifiers are unique per Scholar, per course attempt_
+&nbsp;                  | _(even if multiple Scholars take the same course at one institution)._
+
+### AII.2 Course Topic and Discipline {-}
+Field Name              | Description
+----------------------- | -----------
+\texttt{Course Name}    | the common name of the course as it is listed on the transcript
+&nbsp;                  |
+\texttt{NCES Course}    | the standardized name for the course, from the 
+&nbsp;                  | National Center for Education Statistics
+&nbsp;                  |
+\texttt{NCES Major Category} | the top-level standardized category for the course, from the 
+&nbsp;                  | National Center for Education Statistics
+&nbsp;                  |
+\texttt{CIP Code and Title} |	the standardized code and title for the course using the
+&nbsp;                  | [Classification of Instructional Programs (CIP) taxonomy](https://nces.ed.gov/ipeds/cipcode/), from the 
+&nbsp;                  | National Center for Education Statistics
+&nbsp;                  |
+\texttt{Math Category}  | an internal designation by SCS Noonan Scholars documenting
+&nbsp;                  | the level of mathematics courses, one of:
+&nbsp;                  |
+&nbsp;                  | \texttt{ A:}	All Precalculus Algebra, Trigonometry and Introduction to Calculus
+&nbsp;                  | \texttt{B1:}	Single Variable Calculus
+&nbsp;                  | \texttt{B2:}	Multivariable Calculus
+&nbsp;                  | \texttt{ C:}	Intermediate Mathematics beyond Calculus II, 200-Level Mathematics
+&nbsp;                  | \texttt{ D:}	Advanced Mathematics, 300- to 400-Level Mathematics
+&nbsp;                  | \texttt{ E:}	Statistics
+&nbsp;                  | \texttt{ O:}	Other (Math for Non-Science Majors, Quantative Reasoning, etc.)
+&nbsp;                  |
+&nbsp;                  | _Note: this field left blank for non-mathematics courses._
+
+### AII.3 Performance {-}
+Field Name              | Description
+----------------------- | -----------
+\texttt{Course GPA (Normalized)} | the Scholar's earned GPA in the course, normalized to a 4-point scale
+&nbsp;                  | _Note: courses with a grading option of \texttt{Pass/Credit} or \texttt{Fail/No Credit},_ 
+&nbsp;                  | _as well as courses from which the Scholar withdrew are listed a 0._
+&nbsp;                  |
+\texttt{Course Grade}   | the Scholar's earned letter grade in the course, one of: 
+&nbsp;                  | (\texttt{A}, \texttt{A-}, \texttt{B+}, \texttt{B}, \texttt{B-}, \texttt{C+}, \texttt{C}, \texttt{C-}, \texttt{D+}, \texttt{D}, \texttt{D-}, \texttt{F},
+&nbsp;                  | &nbsp;\texttt{Pass/Credit}, \texttt{Fail/No Credit}, \texttt{Withdrawn})
+
+### AII.4 Calculated and Supplemental Fields {-}
+In addition to the provided data, the following additional field was calculated and appended to the original dataset to facilitate analysis.
+
+Field Name              | Description
+----------------------- | -----------
+\texttt{Performance}    | \texttt{"B+ or above"} if the earned grade is a B+ or higher or \texttt{Pass/Credit},
+&nbsp;                  | \texttt{"B or above"} if the earned grade is a B or higher,
+&nbsp;                  | \texttt{"Below B"} otherwise (calculated field)
+&nbsp;                  | 
+\texttt{STEM Course?}   | 1 if the course is in a STEM discipline, 0 otherwise
+&nbsp;                  | 
+&nbsp;                  | _Note: STEM disciplines include: Physics; Mathematics; Chemistry;_
+&nbsp;                  | _Computer Science; Biology; Chemistry; Geology; Engineering; Genetics;_
+&nbsp;                  | _Statistics; Pre-Med; and variations thereof. This label was manually_
+&nbsp;                  | _curated._
+&nbsp;                  | 
+\texttt{Writing-Intensive?} | 1 if the course is in a Writing-Intensive discipline, 0 otherwise
+&nbsp;                  | 
+&nbsp;                  | _Note: Writing-Intensive disciplines include: Communication;_
+&nbsp;                  | _Journalism and Related Programs; English Language and _
+&nbsp;                  | _Literature/Letters; Foreign Languages, Literatures, and_
+&nbsp;                  | _Linguistics; History; Legal Professions and Studies; and_
+&nbsp;                  | _Philosophy and Religious Studies. This label was manually curated._
+&nbsp;                  | 
+\texttt{GPA - Freshman Year} | a value from 0-4.0 representing the Scholar's calculated
+&nbsp;                  | collegiate GPA during their freshman year
+&nbsp;                  | _Note: this field (and subsequent fields for later years) left blank_
+&nbsp;                  | _for Scholars who have not completed the corresponding year._
+&nbsp;                  |  
+\texttt{GPA - Sophomore Year} | a value from 0-4.0 representing the Scholar's calculated
+&nbsp;                  | collegiate GPA during their sophomore year
+&nbsp;                  |  
+\texttt{GPA - Juinior Year} | a value from 0-4.0 representing the Scholar's calculated
+&nbsp;                  | collegiate GPA during their junior year
+&nbsp;                  |  
+\texttt{GPA - Senior Year} | a value from 0-4.0 representing the Scholar's calculated
+&nbsp;                  | collegiate GPA during their senior year
+&nbsp;                  | 
+\texttt{GPA - Super Senior} | a value from 0-4.0 representing the Scholar's calculated
+&nbsp;                  | collegiate GPA during years beyond the 4th year
+&nbsp;                  | 

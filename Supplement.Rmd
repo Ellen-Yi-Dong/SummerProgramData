@@ -1,0 +1,249 @@
+---
+title: |
+  | SCS Noonan Scholars Program: 
+  | Analysis of the 2012-2018 Cohorts
+  | SUPPLEMENTAL FILE
+author: "R. Jordan Crouser, PhD"
+date: "8/19/2019"
+output:
+  pdf_document:
+    toc: false
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      message = FALSE, 
+                      warning = FALSE)
+
+library(tidyverse)
+library(reshape2)
+library(readxl)
+library(scales)
+library(pander)
+library(magrittr)
+library(ggpubr)
+library(stringr)
+
+panderOptions('table.split.table', 'Inf')
+panderOptions('table.split.cells', '80')
+panderOptions('keep.line.breaks', TRUE)
+panderOptions('missing', '--')
+```
+
+```{r ingest-data}
+# Import historic SAT percentile data from College Board (99+ encoded as 100)
+SAT_percentile_historic <- read_csv("College Board Historic SAT Percentiles.csv", 
+                                    col_types = cols(.default = "n")) %>%
+  gather(key = "Year", value = "SAT Percentile", -`SAT Composite Score`) %>%
+  mutate(Cohort = as.numeric(Year)+1) %>%
+  select(-Year)
+
+# Import Scholar Metadata, join with SAT Percentile
+scholar_metadata = read_csv("Scholar Metadata.csv") %>%
+  
+  # Calculate some new fields
+  mutate(`Family Income per Capita` = `Family Income`/`Family Size`,
+         `# Years to Graduate` = ifelse(`Scholar Status` == "Scholar Alumni", `# Years of College`, NA),
+
+         `STEM Persistence` = ifelse(`Current Major STEM?` == 0 & `Intended Major STEM?` == 1,
+                                               "Dropped STEM", 
+                                               ifelse(`Current Major STEM?` == 1 & `Intended Major STEM?` == 0, 
+                                                      "Added STEM", 
+                                                      ifelse(`Current Major STEM?` == 1 & `Intended Major STEM?` == 1, 
+                                                             "Persisted in STEM", 
+                                                             ifelse(`Current Major STEM?` == 0 & `Intended Major STEM?` == 0, 
+                                                                    "Persisted in non-STEM", 
+                                                                    "UNKNOWN")
+                                                             )
+                                                      )
+                                               )
+         ) %>%
+  
+  # Recode some columns
+  mutate(`Class Rank` = as.numeric(`Class Rank`),
+         `First Generation College Student` = as.numeric(`First Generation College Student`),
+         `STEM Persistence` = factor(`STEM Persistence`, 
+                                               levels = c("Persisted in non-STEM", 
+                                                          "Dropped STEM", 
+                                                          "Added STEM", 
+                                                          "Persisted in STEM")),
+         Gender = as.factor(Gender),
+         `College Degree Earned Type` = as.factor(`College Degree Earned Type`),
+         `Estimated Student Loans at Graduation` = factor(`Estimated Student Loans at Graduation`,
+                                                          levels = c("No Student Loans",
+                                                                     "Less than 5,000",
+                                                                     "5,000-9,999",
+                                                                     "10,000-19,999",
+                                                                     "20,000-29,999",
+                                                                     "More than 30,000")),
+         `Scholar Status` = as.factor(`Scholar Status`),
+         `Scholar Secondary Status` = as.factor(`Scholar Secondary Status`),
+         `6 Months Post College: Employment Status` = as.factor(`6 Months Post College: Employment Status`),
+         `6 Months Post College: Graduate School` = as.factor(`6 Months Post College: Graduate School`)) %>%
+  
+    mutate(IvyPlus = ifelse(`Scholar College` %in% c("Brown University", "Columbia University",
+                                                   "Cornell University", "Dartmouth College", 
+                                                   "Harvard University", "University of Pennsylvania", 
+                                                   "Princeton University", "Yale University",
+                                                   "Stanford", "Massachusetts Institute of Technology",
+                                                   "University of Chicago", "Duke University" ), 1, 0)) %>%
+  
+    filter(Cohort >= 2012,
+         !`Scholar Secondary Status` %in% c("Did Not Renew", "Break/Suspension")) %>%
+  
+    filter(`Scholar Status` == "Scholar Alumni" | (`Last Renewal Date` %in% c("2019 Spring", "2019 Fall", NA) &
+                                                   `Scholar Status` == "Current Scholar")) %>%
+  
+  left_join(SAT_percentile_historic, by = c("SAT Total" = "SAT Composite Score", "Cohort" = "Cohort")) %>%
+  mutate(`SAT Group` = cut(`SAT Percentile`, 
+                              breaks= c(-Inf, 49, 79, Inf),
+                              labels = c("<50th", 
+                                         "50th-80th", 
+                                         ">80th")),
+         `College Forbes Ranking 2018` = as.numeric(`College Forbes Ranking 2018`))
+
+# LOAD SCHOLAR TRANSCRIPTS
+scholar_transcripts <- read_csv("Scholar Transcripts.csv") %>%
+  mutate(`College Year` = factor(`College Year`, levels = c("Freshman",
+                                                            "Sophomore",
+                                                            "Junior",
+                                                            "Senior",
+                                                            "Super Senior")),
+        
+         Performance = ifelse(`Course GPA (Normalized)` >= 3.3, "B+ or above", 
+                              ifelse(`Course GPA (Normalized)` >= 3.0, "B or above", "Below B")))
+
+scholar_transcripts = scholar_metadata %>%
+  select(`Scholar ID`, `Cohort`, `# SA Cohorts`) %>%
+  inner_join(scholar_transcripts, by= "Scholar ID")
+```
+
+# Average GPA
+```{r}
+scholar_metadata %>%
+  filter(!is.na(`Scholar College`)) %>%
+  rename(`Institution` = `Scholar College`) %>%
+  group_by(`Institution`) %>%
+  summarise(`# Scholars enrolled since 2012` = n(),
+            `Average GPA` = round(mean(`Reported Total GPA`, na.rm = T), 2),
+            `Standard Deviation` = paste("±", round(sd(`Reported Total GPA`, na.rm = T), 2))) %>%
+  filter(`# Scholars enrolled since 2012` >= 10) %>%
+  arrange(desc(`Average GPA`)) %>%
+  pander(justify = c("left", "center", "left", "left"), 
+         split.cells = c(40, 10,10,10),
+         caption = "Average GPA by Institution\n(10 or more Scholars attending since 2012)")
+```
+
+\newpage
+
+```{r}
+ivyGPA = scholar_metadata %>%
+  filter(`IvyPlus` == 1) %>%
+  summarise(`Level` = "Ivy Plus",
+            `# Scholars enrolled since 2012` = n(),
+            `Average GPA` = round(mean(`Reported Total GPA`, na.rm = T), 2),
+            `Standard Deviation` = paste("±", round(sd(`Reported Total GPA`, na.rm = T), 2)))
+
+top20GPA = scholar_metadata %>%
+  filter(`College Forbes Ranking 2018` <= 20) %>%
+  summarise(`Level` = "Top 20",
+            `# Scholars enrolled since 2012` = n(),
+            `Average GPA` = round(mean(`Reported Total GPA`, na.rm = T), 2),
+            `Standard Deviation` = paste("±", round(sd(`Reported Total GPA`, na.rm = T), 2)))
+
+top50GPA = scholar_metadata %>%
+  filter(`College Forbes Ranking 2018` <= 50) %>%
+  summarise(`Level` = "Top 50",
+            `# Scholars enrolled since 2012` = n(),
+            `Average GPA` = round(mean(`Reported Total GPA`, na.rm = T), 2),
+            `Standard Deviation` = paste("±", round(sd(`Reported Total GPA`, na.rm = T), 2)))
+
+top100GPA = scholar_metadata %>%
+  filter(`College Forbes Ranking 2018` <= 100) %>%
+  summarise(`Level` = "Top 100",
+            `# Scholars enrolled since 2012` = n(),
+            `Average GPA` = round(mean(`Reported Total GPA`, na.rm = T), 2),
+            `Standard Deviation` = paste("±", round(sd(`Reported Total GPA`, na.rm = T), 2)))
+
+outsideTop100GPA = scholar_metadata %>%
+  filter(`College Forbes Ranking 2018` > 100) %>%
+  summarise(`Level` = "Outside Top 100",
+            `# Scholars enrolled since 2012` = n(),
+            `Average GPA` = round(mean(`Reported Total GPA`, na.rm = T), 2),
+            `Standard Deviation` = paste("±", round(sd(`Reported Total GPA`, na.rm = T), 2)))
+
+rbind(ivyGPA, top20GPA, top50GPA, top100GPA, outsideTop100GPA)  %>%
+  pander(justify = c("left", "center", "left", "left"), 
+         split.cells = c(40, 10,10,10),
+         caption = "Average GPA by Institution Level")
+```
+
+```{r major_upon_graduation}
+scholar_metadata %>%
+  filter(`Scholar Status` == "Scholar Alumni") %>%
+  mutate(`Current Major Category` = str_replace_all(str_to_title(`Current Major Category`), "And", "&"),
+         `Current Major Category` = ifelse(`Current Major Category` == "Social Sciences",
+                                           "Economics, Sociology, Political Science, & Related Fields", `Current Major Category`)) %>%
+  #separate(`Current Major Category`, c("Current Major Category", "Current Major Detail"), ": ") %>%
+  group_by(`Current Major Category`) %>%
+  filter(!is.na(`Current Major Category`),
+         `Current Major Category` != "#N/A",
+         `Current Major Category` != "Undeclared.") %>%
+  summarise(`# Scholars` = n(),
+            `Average GPA` = round(mean(`Reported Total GPA`, na.rm = T), 2),
+            `Standard Deviation` = paste("±", round(sd(`Reported Total GPA`, na.rm = T), 2))) %>%
+  arrange(desc(`Average GPA`)) %>%
+  filter(`# Scholars` >= 10) %>%
+  pander(justify = c('left', 'center', 'left', 'left'), 
+         split.cells = c(60, 10, 10, 10),
+         caption = "Average GPA by Major Upon Graduation")
+```
+
+```{r}
+scholar_transcripts %>%
+  mutate(`NCES Course` = ifelse(`NCES Course` == "Multivariable Calculus.", "Calculus 2.", `NCES Course`)) %>%
+  filter(!`Course Grade` %in% c("Pass/Credit", "Withdrawn"),
+         `# SA Cohorts` > 0) %>%
+  group_by(`NCES Course`) %>%
+  summarise(`# Scholars` = n(),
+            `Average GPA` = round(mean(`Course GPA (Normalized)`, na.rm = T), 2),
+            `Standard Deviation` = paste("±", round(sd(`Course GPA (Normalized)`, na.rm = T), 2))) %>%
+  ungroup() %>%
+  filter(`# Scholars` > 100) %>%
+  arrange(desc(`Average GPA`)) %>%
+  pander(justify = c('left', 'center', 'center', 'center'),
+         split.cells = c(Inf, 10, 10, 8),
+         caption = "Average GPA by NCES Course (>=100 attempts across all cohorts, # SA Cohorts > 0, omitting Pass/Credit and Withdrawn attempts)")
+```
+```{r}
+scholar_transcripts %>%
+  mutate(`NCES Course` = ifelse(`NCES Course` == "Multivariable Calculus.", "Calculus 2.", `NCES Course`)) %>%
+  filter(!`Course Grade` %in% c("Pass/Credit", "Withdrawn"),
+         `# SA Cohorts` == 0) %>%
+  group_by(`NCES Course`) %>%
+  summarise(`# Scholars` = n(),
+            `Average GPA` = round(mean(`Course GPA (Normalized)`, na.rm = T), 2),
+            `Standard Deviation` = paste("±", round(sd(`Course GPA (Normalized)`, na.rm = T), 2))) %>%
+  ungroup() %>%
+  filter(`# Scholars` > 100) %>%
+  arrange(desc(`Average GPA`)) %>%
+  pander(justify = c('left', 'center', 'center', 'center'),
+         split.cells = c(Inf, 10, 10, 8),
+         caption = "Average GPA by NCES Course (>=100 attempts across all cohorts, only non-SA Scholars, omitting Pass/Credit and Withdrawn attempts)")
+```
+
+# Scholars taking Calculus-Based vs. Statistics Courses, by Cohort
+_Note: if a Scholar takes both Calculus- and Statistics-based courses, they are counted in both columns_.
+```{r}
+scholar_transcripts %>%
+  filter(`Math Category` %in% c("B1", "B2", "C", "E")) %>%
+  mutate(`Math Category` = ifelse(`Math Category` == "E", "Stats", "Calc")) %>%
+  select(`Scholar ID`, Cohort, `Math Category`) %>%
+  unique() %>%
+  group_by(Cohort) %>%
+  summarise(`# Taking Calculus-Based Courses` = sum(`Math Category` == "Calc"),
+            `# Taking Statistics-Based Courses` = sum(`Math Category` == "Stats")) %>%
+  pander(split.cells = c(10, 30, 30))
+```
+
